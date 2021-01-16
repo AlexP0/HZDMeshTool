@@ -158,7 +158,7 @@ def Parse4x4Matrix(f):
     # matrix = (row1,row2,row3,row4)
     matrix = mathutils.Matrix((row1,row2,row3,row4)).inverted()
     return matrix
-def ParseVertex(f,stride,half=False):
+def ParseVertex(f,stride,half=False,boneCount=0):
     r = ByteReader()
     #Positions
     if half:
@@ -174,8 +174,8 @@ def ParseVertex(f,stride,half=False):
         z = r.float(f)
     #Bone Indices
     boneIndices = []
-    if stride == 36:
-        bic = 8
+    if boneCount >= 256:
+        bic = (stride - coLength)/3
         bint16 = True
     else:
         bic = (stride - coLength)/2 #bone indices count
@@ -308,6 +308,8 @@ def CreateMesh(BIL):
     core = HZDEditor.HZDAbsPath
     stream = core+".stream"
     coresize = os.path.getsize(core)
+    boneCount = len(bpy.data.objects[HZDEditor.SkeletonName].data.bones)
+
     with open(stream,'rb') as f:
         #Vertices////////////////////
         vList = []
@@ -322,7 +324,7 @@ def CreateMesh(BIL):
         #     half = False
         f.seek(mb.vOffset)
         for n in range(mb.vCount):
-            vertex,vBoneIndices,vBoneWeights = ParseVertex(f,mb.vStride,mb.coHalf)
+            vertex,vBoneIndices,vBoneWeights = ParseVertex(f,mb.vStride,mb.coHalf,boneCount)
             vList.append(vertex)
             biList.append(vBoneIndices)
             bwList.append(vBoneWeights)
@@ -417,6 +419,7 @@ def CreateMesh(BIL):
     bm.free()
     mesh.update()
 
+    # Vertex Groups ######################################
     SkeletonPath = HZDEditor.SkeletonAbsPath
     CoreBones = []
     with open(SkeletonPath, 'rb') as f:
@@ -432,7 +435,6 @@ def CreateMesh(BIL):
             f.seek(6, 1)
             CoreBones.append(boneName)
 
-    # Vertex Groups ######################################
     for bone in CoreBones:
         obj.vertex_groups.new(name=bone)
     # deform_layer = bm.verts.layers.deform.new()
@@ -447,7 +449,6 @@ def CreateMesh(BIL):
             if index ==-1:
                 index = len(biList[vindex])-1
                 # print(vindex, index,bwList[vindex][index])
-
             obj.vertex_groups[CoreBones[boneindex]].add([vindex],bwList[vindex][index],"ADD")
             # print(vindex,boneindex,bwList[vindex][index])
     #         v[deform_layer][boneindex] = bwList[i][index]
@@ -496,7 +497,7 @@ def CreateSkeleton():
 
     bpy.ops.object.mode_set(mode='OBJECT')
 
-def PackVertex(f,vertex,stride,half=False):
+def PackVertex(f,vertex,stride,half=False,boneCount=0):
     p = BytePacker()
     bVertex = b''
     x = vertex.co[0]
@@ -514,8 +515,8 @@ def PackVertex(f,vertex,stride,half=False):
         bVertex += p.float(y)
         bVertex += p.float(z)
     # Bone Indices
-    if stride == 36:
-        bic = 8
+    if boneCount >= 256:
+        bic = int((stride - coLength) / 3)
         bint16 = True
     else:
         bic = int((stride - coLength) / 2)  # bone indices count
@@ -529,6 +530,8 @@ def PackVertex(f,vertex,stride,half=False):
     totalweight = 0.0
     for gw in groupsweights:
         totalweight += groupsweights[gw]
+    if totalweight == 0:
+        raise Exception("Vertex {v} has no weight".format(v=vertex.index))
     normalizer = 1/totalweight
     for gw in groupsweights:
         groupsweights[gw] *= normalizer
@@ -628,6 +631,7 @@ def ExportMesh(BIL):
     HZDEditor = bpy.context.scene.HZDEditor
     core = HZDEditor.HZDAbsPath
     stream = core + ".stream"
+    boneCount = len(bpy.data.objects[HZDEditor.SkeletonName].data.bones)
 
     #Check if there's already a modded file
     if os.path.exists(core+"MOD"):
@@ -649,7 +653,7 @@ def ExportMesh(BIL):
         #Vertices
         newcovOffset = w.tell()
         for v in EditedMesh.vertices: #range(mb.vCount):
-            PackVertex(w,v,mb.vStride,mb.coHalf)
+            PackVertex(w,v,mb.vStride,mb.coHalf,boneCount)
         FillChunk(w)
         newcovSize = w.tell()-newcovOffset
 
