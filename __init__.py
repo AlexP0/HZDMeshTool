@@ -2,7 +2,7 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 0, 2),
+    "version": (1, 0, 3),
     "blender": (2, 91, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -545,17 +545,24 @@ def PackVertex(f,vertex,stride,half=False):
             bVertex += p.uint8(bw[0])
     # print(len(bVertex))
     for i  in range(boneRepeat):
-        bVertex += p.uint8(truncweights[len(truncweights)-1][0])
+        if bint16:
+            bVertex += p.uint16(truncweights[len(truncweights)-1][0])
+        else:
+            bVertex += p.uint8(truncweights[len(truncweights) - 1][0])
     # print(len(bVertex))
     for i,bw in enumerate(truncweights):
         if i == 0:
             pass #the biggest weight goes as the remainder
         else:
-            print(bw[1],bw[1]*255,int(round(bw[1]*255)))
+            # print(bw[1],bw[1]*255,int(round(bw[1]*255)))
             bVertex += p.uint8(int(round(bw[1]*255)))
     # print(len(bVertex))
     #Fill remainder
-    vbLength = coLength+bic+bic
+    if bint16:
+        vbLength = coLength+(bic*2)+bic
+    else:
+        vbLength = coLength + bic + bic
+    # print(vbLength,len(bVertex))
     for b in range(len(bVertex),vbLength):
         bVertex += b'\x00'
     # print(bic, boneRepeat,len(bVertex))
