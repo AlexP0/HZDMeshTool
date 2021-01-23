@@ -596,18 +596,18 @@ def PackNormal(f,ntb,stride):
 def PackUVs(f,uv):
     p = BytePacker()
     bUV = b''
-    bUV += p.float16(uv[0][0])
-    bUV += p.float16(uv[0][1])
-    if uv[1] is not None:
-        # print("Has 2 UVs",uv)
-        bUV += p.float16(uv[1][0])
-        bUV += p.float16(uv[1][1])
-    if uv[2] is not None:
+    if uv[2] is not None: #VERTEX COLOR
         # print("Has Vertex Color",uv)
         bUV += p.uint8(int(uv[2][0]*255))
         bUV += p.uint8(int(uv[2][1]*255))
         bUV += p.uint8(int(uv[2][2]*255))
         bUV += p.uint8(int(uv[2][3]*255))
+    bUV += p.float16(uv[0][0]) #UV
+    bUV += p.float16(uv[0][1])
+    if uv[1] is not None: #UV2
+        # print("Has 2 UVs",uv)
+        bUV += p.float16(uv[1][0])
+        bUV += p.float16(uv[1][1])
     f.write(bUV)
 def PackFace(f,face):
     p = BytePacker()
