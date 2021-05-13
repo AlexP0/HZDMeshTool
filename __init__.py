@@ -2,7 +2,7 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 0, 3),
+    "version": (1, 0, 5),
     "blender": (2, 91, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -256,8 +256,9 @@ class MeshBlock:
     HasTwoUV = False
     HasVertexColor = False
     HasEdgeData = False
-    coHalf = False
+    coHalf = False #vertex coordinates are stored as half floats
     RealOffsets = False #sometimes normals and UVs reference real offset in the stream (usually it's the same as vertex offset)
+    FullWeight = False #only 1 bone per vertex
     MeshName = ""
     MaterialName = ""
     vOffset = 0  #Vertices
@@ -449,6 +450,7 @@ def CreateMesh(BIL):
             if index ==-1:
                 index = len(biList[vindex])-1
                 # print(vindex, index,bwList[vindex][index])
+            print(boneindex)
             obj.vertex_groups[CoreBones[boneindex]].add([vindex],bwList[vindex][index],"ADD")
             # print(vindex,boneindex,bwList[vindex][index])
     #         v[deform_layer][boneindex] = bwList[i][index]
@@ -973,7 +975,7 @@ def SearchCoreData():
                             mb.couSize = mb.conSize
                             mb.uSize = mb.nSize
                             mb.HasNormalData = False
-                if mb.vCount * 8 >= mb.uSize:
+                if mb.vCount * 8 > mb.uSize:
                     mb.HasVertexColor = False
                 else:
                     mb.HasVertexColor = True
@@ -1064,7 +1066,7 @@ def SearchCoreData():
         sum = 0
         for i,mb in enumerate(MeshBlocks):
             prev = MeshBlocks[i - 1]
-            print(i,mb.MeshName, mb.MaterialName,mb.IsInCore,"vC=",mb.vCount,"vO=",mb.vOffset,"vS=",mb.vSize,"vSt=",mb.vStride,"nO=",mb.nOffset,"nS=",mb.nSize,"uO=",mb.uOffset,"uS=",mb.uSize,"fO=",mb.fOffset,"fS=",mb.fSize,"2UV=", mb.HasTwoUV, "Normals=",mb.HasNormalData, "HasUnknownData=",mb.HasUnknownData)
+            print(i,mb.MeshName, mb.MaterialName,mb.IsInCore,"vC=",mb.vCount,"vO=",mb.vOffset,"vS=",mb.vSize,"vSt=",mb.vStride,"nO=",mb.nOffset,"nS=",mb.nSize,"uO=",mb.uOffset,"uS=",mb.uSize,"fO=",mb.fOffset,"fS=",mb.fSize,"2UV=", mb.HasTwoUV,"Color=",mb.HasVertexColor, "Normals=",mb.HasNormalData, "HasUnknownData=",mb.HasUnknownData)
             # print(mb.vSize + mb.nSize + mb.uSize + mb.fSize)
             if i == 0:
                 pass
