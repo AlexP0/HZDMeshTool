@@ -2,7 +2,7 @@
 Import/Export meshes from Horizon Zero Dawn's .core format
 
 ### Download
-https://github.com/AlexP0/HZDMeshTool/releases/tag/1.0.2
+https://github.com/AlexP0/HZDMeshTool/releases/tag/1.0.4
 
 ### Installation
 - In Blender open the User Preferences
