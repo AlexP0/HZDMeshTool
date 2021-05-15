@@ -18,12 +18,11 @@ import numpy as np
 import mathutils
 import operator
 
-#Need a better way of finding if vertex coords are stored as half floats
 
 MIOList = []
 MeshBlocks = []
 BoneMatrices = {}
-
+asset = None
 
 def ClearProperties(self,context):
     HZDEditor = bpy.context.scene.HZDEditor
@@ -39,6 +38,16 @@ class ByteReader:
         b = f.read(1)
         i = unpack('<b', b)[0]
         return i
+    @staticmethod
+    def bool(f):
+        b = f.read(1)
+        i = unpack('<b', b)[0]
+        if i == 0:
+            return False
+        elif i == 1:
+            return True
+        else:
+            raise Exception("Byte at {v} wasn't a boolean".format(v=f.tell()))
     @staticmethod
     def uint8(f):
         b = f.read(1)
@@ -72,6 +81,13 @@ class ByteReader:
         return i
     @staticmethod
     def string(f,length):
+        b = f.read(length)
+        return "".join(chr(x) for x in b)
+    @staticmethod
+    def hashtext(f):
+        b = f.read(4)
+        length = unpack('<i', b)[0]
+        f.seek(4,1)
         b = f.read(length)
         return "".join(chr(x) for x in b)
     @staticmethod
@@ -819,6 +835,319 @@ def ExportMesh(BIL):
 def IsMoveInScope(f,offset, size, desiredMove):
     current = f.tell()
     return current+desiredMove < offset + size
+
+class Asset:
+    def __init__(self):
+        self.LODGroups = []
+        self.LODObjects = []
+
+class DataBlock:
+    def __init__(self,f):
+        r = ByteReader()
+        self.ID = r.int64(f)
+        self.size = r.int32(f)
+        self.blockStartOffset = f.tell()
+    def EndBlock(self,f):
+        f.seek(self.blockStartOffset + self.size)
+
+class Bone:
+    def __init__(self,matrix, index = 0):
+        self.index = index
+        self.matrix = matrix
+class BoneData:
+    def __init__(self,f,matrixCount):
+        self.indexOffset = 0
+        self.matrixOffset = 0
+        self.matrixCount = matrixCount
+        self.boneList = []
+    def ParseBoneData(self,f):
+        r = ByteReader()
+        self.indexOffset = f.tell()
+        self.matrixOffset = self.indexOffset+(self.matrixCount*2)
+        for i in range(self.matrixCount):
+            f.seek(self.indexOffset)
+            f.seek(i*2,1)
+            index = r.int16(f)
+            f.seek(self.matrixOffset)
+            f.seek(64*i,1)
+            matrix = Parse4x4Matrix(f)
+            self.boneList.append(Bone(matrix,index))
+class SkeletonBlock(DataBlock):
+    def __init__(self, f):
+        super().__init__(f)
+        self.matrixCount = 0
+        self.boneData = None
+
+    def ParseSkeleton(self,f):
+        r = ByteReader()
+
+        f.seek(20,1)
+        self.matrixCount = r.int32(f)
+        self.boneData = BoneData(f,self.matrixCount)
+
+        self.EndBlock(f)
+
+class MeshNameBlock(DataBlock):
+    def __init__(self, f):
+        super().__init__(f)
+        self.name = ""
+
+        self.ParseMeshName(f)
+
+    def ParseMeshName(self,f):
+        r = ByteReader()
+        f.seek(16,1)
+        self.name = r.hashtext(f)
+        self.EndBlock(f)
+class MeshInfo:
+    def __init__(self,f):
+        r = ByteReader()
+        f.seek(8,1)
+        f.seek(16,1)
+        self.vertexCount = r.int32(f)
+        f.seek(13,1)
+class MeshBlockInfo(DataBlock):
+    def __init__(self,f):
+        super().__init__(f)
+        self.meshBlockCount = 0
+        self.meshInfos = []
+
+    def ParseMeshBlockInfo(self,f):
+        r = ByteReader()
+        f.seek(16,1)
+        self.meshBlockCount = r.int32(f)
+        for i in range(self.meshBlockCount):
+            self.meshInfos.append(MeshInfo(f))
+        self.EndBlock(f)
+
+class StreamRef:
+    def __init__(self,f,blockOffset,blockSize):
+        self.blockOffset = blockOffset
+        self.blockSize = blockSize
+        self.stride = 0
+        self.pathLength = 0
+        self.streamPath = ""
+        self.dataOffset = 0
+        self.dataSize = 0
+
+        self.ParseStreamRef(f)
+
+    def ParseStreamRef(self,f):
+        r = ByteReader()
+        f.seek(4,1)
+        self.stride = r.int32(f)
+        unknownCount = r.int32(f)
+        f.seek(16,1)
+        for i in range(unknownCount):
+            f.seek(4,1)
+        self.pathLength = r.int32(f)
+        if 12 >= self.pathLength > 2000: # kinda arbitrary numbers, was easier to put 2000 than getting file size.
+            f.seek(self.blockOffset+self.blockSize)
+        else:
+            self.streamPath = r.string(f,self.pathLength)
+            self.dataOffset = r.int64(f)
+            self.dataSize = r.int64(f)
+
+class EdgeBlock(DataBlock):
+    def __init__(self,f):
+        super().__init__(f)
+        self.streamPath = ""
+        self.EdgeDataOffset = 0
+        self.EdgeDataSize = 0
+
+        self.ParseEdgeBlock(f)
+
+    def ParseEdgeBlock(self,f):
+        r = ByteReader()
+        f.seek(36,1)
+        pathLength = r.int32(f)
+        self.streamPath = r.string(f,pathLength)
+        self.EdgeDataOffset = r.int64(f)
+        self.EdgeDataSize = r.int64(f)
+        self.EndBlock(f)
+class VertexBlock(DataBlock):
+    def __init__(self,f):
+        super().__init__(f)
+        self.vertexCount = 0
+        self.streamRefCount = 0
+        self.inStream = True
+        self.vertexStream = None
+        self.normalsStream = None
+        self.uvStream = None
+
+        self.ParseVertexBlock(f)
+
+    def ParseVertexBlock(self,f):
+        r = ByteReader()
+        f.seek(16,1)
+        self.vertexCount = r.int32(f)
+        self.streamRefCount = r.int32(f)
+        self.inStream = r.bool(f)
+        if self.inStream:
+            self.vertexStream = StreamRef(f,self.blockStartOffset,self.size)
+
+            if self.streamRefCount == 3:
+                self.normalsStream = StreamRef(f,self.blockStartOffset,self.size)
+                self.uvStream = StreamRef(f,self.blockStartOffset,self.size)
+            else:
+                self.uvStream = StreamRef(f,self.blockStartOffset,self.size)
+        self.EndBlock(f)
+class FaceBlock(DataBlock):
+    def __init__(self,f):
+        super().__init__(f)
+        self.indexCount = 0
+        self.inStream = True
+        self.pathLength = 0
+        self.streamPath = ""
+        self.faceDataOffset = 0
+        self.faceDataSize = 0
+
+        self.ParseFaceBlock(f)
+
+    def ParseFaceBlock(self,f):
+        r = ByteReader()
+        f.seek(16, 1)
+        self.indexCount = r.int32(f)
+        f.seek(8,1)
+        self.inStream = r.bool(f)
+        f.seek(16,1)
+        if self.inStream:
+            self.pathLength = r.int32(f)
+            if 12 >= self.pathLength > 2000:  # kinda arbitrary numbers, was easier to put 2000 than getting file size.
+                f.seek(self.blockStartOffset + self.size)
+            else:
+                self.streamPath = r.string(f, self.pathLength)
+                self.faceDataOffset = r.int64(f)
+                self.faceDataSize = r.int64(f)
+        self.EndBlock(f)
+
+class MeshDataBlock:
+    def __init__(self,f):
+        self.edgeBlock = None
+        self.unknownBlock = None
+        self.vertexBlock = None
+        self.faceBlock = None
+
+        self.ReadMeshBlock(f)
+
+    def ReadMeshBlock(self,f):
+        r = ByteReader()
+        IDCheck = r.int64(f)
+        if IDCheck == 10234768860597628846:
+            self.edgeBlock = EdgeBlock(f)
+        self.unknownBlock = DataBlock(f)
+        self.unknownBlock.EndBlock(f)
+        self.vertexBlock = VertexBlock(f)
+        self.faceBlock = FaceBlock(f)
+
+class ShaderBlock(DataBlock):
+    def __init__(self,f):
+        super().__init__(f)
+        self.shaderName = ""
+        self.subshaderCount = 0
+
+        self.ParseShaderBlock(f)
+
+    def ParseShaderBlock(self,f):
+        r = ByteReader()
+        f.seek(16,1)
+        self.shaderName = r.hashtext(f)
+        f.seek(4,1)
+        self.subshaderCount = r.int32(f)
+        self.EndBlock(f)
+
+class LOD:
+    def __init__(self,f):
+        self.meshNameBlock = MeshNameBlock(f)
+        self.skeletonBlock = SkeletonBlock(f)
+        self.unknownBlock = DataBlock(f)
+        self.unknownBlock.EndBlock(f)
+        self.meshBlockInfo = MeshBlockInfo(f)
+        self.meshBlockList = []
+        self.shaderBlockList = []
+
+
+        for i in range(self.meshBlockInfo.meshBlockCount):
+            self.meshBlockList.append(MeshDataBlock(f))
+        for i in range(self.meshBlockInfo.meshBlockCount):
+            shader = ShaderBlock(f)
+            for s in range(shader.subshaderCount):
+                db = DataBlock(f)
+                db.EndBlock(f)
+            self.shaderBlockList.append(shader)
+class LODGroup(DataBlock):
+    def __init__(self, f):
+        super().__init__(f)
+        self.objectName = ""
+        self.totalMeshCount = 0
+        self.LODCount = 0
+        self.LODList = []
+
+        self.ParseLODGroupInfo(f)
+
+    def ParseLODGroupInfo(self,f):
+        r = ByteReader()
+        f.seek(16,1)
+        nameLength = r.int32(f)
+        self.objectName = r.string(f,nameLength)
+        f.seek(24,1)
+        f.seek(8,1)
+        self.totalMeshCount = r.int32(f)
+        f.seek(16,1)
+        self.LODCount = r.int32(f)
+
+        self.EndBlock(f)
+
+        for i in range(self.LODCount):
+            lod = LOD(f)
+            self.LODList.append(lod)
+
+class LODObject(DataBlock):
+    def __init__(self, f):
+        super().__init__(f)
+        self.objectName = ""
+        self.totalMeshCount = 0
+        self.LODCount = 0
+        self.LODList = []
+
+        self.ParseLODObjectInfo(f)
+
+    def ParseLODObjectInfo(self,f):
+        r = ByteReader()
+        f.seek(16,1)
+        nameLength = r.int32(f)
+        self.objectName = r.string(f,nameLength)
+        f.seek(24,1)
+        f.seek(8,1)
+        self.totalMeshCount = r.int32(f)
+        f.seek(12,1)
+        self.LODCount = r.int32(f)
+
+        self.EndBlock(f)
+
+        for i in range(self.LODCount):
+            lod = LOD(f)
+            self.LODList.append(lod)
+
+
+def ReadCoreFile():
+    MeshBlocks.clear()
+    r = ByteReader()
+    HZDEditor = bpy.context.scene.HZDEditor
+    core = HZDEditor.HZDAbsPath
+    coresize = os.path.getsize(core)
+
+    global asset
+    asset = Asset()
+
+    with open(core, "rb") as f:
+        while f.tell() < coresize:
+            ID = r.int64(f)
+            f.seek(-8,1)
+            if ID == 6871768592993170868: # LOD Object Info
+                asset.LODObjects.append(LODObject(f))
+            elif ID == 7022335006738406101: # LOD Group Info
+                asset.LODGroups.append(LODGroup(f))
 
 def SearchCoreData():
     MeshBlocks.clear()
