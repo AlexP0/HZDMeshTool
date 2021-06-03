@@ -515,16 +515,8 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
 
 
         f.seek(vb.vertexStream.dataOffset)
-        # check Half
-        f.seek(6, 1)
-        if f.read(2) == b'\x00\x3C':  # dunno how viable this is
-            coHalf = True
-        else:
-            coHalf = False
-        f.seek(-8, 1)
-
         for n in range(vb.vertexCount):
-            vertex,vBoneIndices,vBoneWeights = ParseVertex(f,vb.vertexStream.stride,coHalf,boneCount)
+            vertex,vBoneIndices,vBoneWeights = ParseVertex(f,vb.vertexStream.stride,vb.coHalf,boneCount)
             vList.append(vertex)
             biList.append(vBoneIndices)
             bwList.append(vBoneWeights)
@@ -826,7 +818,7 @@ def PackFace(f,face):
     bFace += p.uint16(v3)
     f.write(bFace)
 
-def ExportMesh(BIL):
+def ExportMesh2(BIL):
     mb = MeshBlocks[BIL]
     objectname = str(BIL)+"_"+mb.MeshName
     EditedMesh = bpy.data.objects[objectname].data
@@ -1019,6 +1011,225 @@ def ExportMesh(BIL):
     os.rename(core + "TMP", core + "MOD")
     os.rename(stream + "TMP", stream + "MOD")
 
+def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
+    r = ByteReader()
+    p = BytePacker()
+    print(isGroup, Index, LODIndex, BlockIndex)
+    if isGroup:
+        lod = asset.LODGroups[Index].LODList[LODIndex]
+        md = lod.meshBlockList[BlockIndex]
+        meshName = lod.meshNameBlock.name
+    else:
+        lod = asset.LODObjects[Index].LODList[LODIndex]
+        md = lod.meshBlockList[BlockIndex]
+        meshName = lod.meshNameBlock.name
+    HZDEditor = bpy.context.scene.HZDEditor
+    core = HZDEditor.HZDAbsPath
+    stream = core + ".stream"
+    coresize = os.path.getsize(core)
+    vb = md.vertexBlock
+    fb = md.faceBlock
+
+    objectName = str(BlockIndex)+"_"+meshName
+    editedMesh = bpy.data.objects[objectName].data
+    boneCount = len(bpy.data.objects[HZDEditor.SkeletonName].data.bones)
+
+    # Check if there's already a modded file
+    if os.path.exists(core + "MOD"):
+        sourcecore = core + "MOD"
+        if os.path.exists(stream + "MOD"):
+            sourcestream = stream + "MOD"
+        else:
+            raise Exception("Modded Core but no Modded Stream")
+    else:
+        sourcecore = core
+        sourcestream = stream
+    coresize = os.path.getsize(sourcecore)
+    streamsize = os.path.getsize(sourcestream)
+
+    # Write Stream
+    with open(sourcestream, 'rb') as f, open(stream + "TMP", 'wb+') as w:
+        CopyFile(f, w, 0, md.vertexBlock.vertexStream.dataOffset) #Copy the source file up to the vertex position
+
+        #Vertices
+
+        newCoVOffset = w.tell() #New offset of our vertex stream
+        for v in editedMesh.vertices:
+            PackVertex(w,v,vb.vertexStream.stride,vb.coHalf,boneCount)
+        FillChunk(w)
+        newCoVSize = w.tell()-newCoVOffset
+
+        #Normals
+        if vb.normalsStream:
+            newCoNOffset = w.tell()
+            editedMesh.calc_tangents()
+            NTB = [((1.0,0.0,0.0),(0.0,1.0,0.0),0.0)] * len(editedMesh.vertices) #Normal Tangent Bi-tangent
+            #Get Normals
+            for l in editedMesh.loops:
+                if l.bitangent_sign == -1:
+                    flip = 1.0
+                else:
+                    flip = 0.0
+                NTB[l.vertex_index] = (l.normal, l.tangent, flip)
+            #Write Normals
+            for n in NTB:
+                PackNormal(w,n,vb.normalsStream.stride)
+            FillChunk(w)
+            newCoNSize = w.tell()-newCoNOffset
+
+        #UVs
+        newCoUOffset = w.tell()
+        UVs = [((0.0,0.0),(0.0,0.0),(0,0,0,0))] * len(editedMesh.vertices)
+        bm = bmesh.new()
+        bm.from_mesh(editedMesh)
+        bm.faces.ensure_lookup_table()
+        #Get UVs and Color
+        for bface in bm.faces:
+            for loop in bface.loops:
+                vertUV = [None,None,None] #UV1,UV2,Color
+
+                uv1 = loop[bm.loops.layers.uv[0]].uv
+                vertUV[0] = uv1
+                if vb.hasTwoUV:
+                    if len(editedMesh.uv_layers) == 2:
+                        uv2 = loop[bm.loops.layers.uv[1]].uv
+                        vertUV[1] = uv2
+                    else:
+                        raise Exception("Mesh Block is expecting 2 UV Layers")
+                if vb.hasVertexColor:
+                    if len(editedMesh.vertex_colors) == 1:
+                        vcolor = loop[bm.loops.layers.color[0]]
+                        vertUV[2] = vcolor
+                    else:
+                        raise Exception("Mesh Block is expecting 1 Vertex Color layer")
+                UVs[loop.vert.index] = vertUV
+        #Write UVs
+        for uvindex,uv in enumerate(UVs):
+            PackUVs(w,uv)
+        FillChunk(w)
+        newCoUSize = w.tell()-newCoUOffset
+
+        #Faces
+        newCoFOffset = w.tell()
+        for poly in editedMesh.polygons:
+            PackFace(w,poly)
+        FillChunk(w)
+        newCoFSize = w.tell()-newCoFOffset
+
+        endOffset = md.faceBlock.faceDataOffset + md.faceBlock.faceDataSize
+        CopyFile(f,w,endOffset,streamsize-endOffset) #Copy the source file to the end.
+
+    # Write Core
+    with open(sourcecore, 'rb') as f, open(core+"TMP",'wb+') as w:
+        CopyFile(f,w,0,coresize) #full copy of source core
+        # WRITE NEW VALUES FOR THE CURRENT MESH BLOCK
+        #Vertex Counts
+        w.seek(vb.posVCount)
+        w.write(p.int32(len(editedMesh.vertices)))
+        w.seek(lod.meshBlockInfo.meshInfos[BlockIndex].posVCount)
+        w.write(p.int32(len(editedMesh.vertices)))
+        #Vertex
+        w.seek(vb.vertexStream.posOffset)
+        w.write(p.int64(newCoVOffset))
+        w.seek(vb.vertexStream.posSize)
+        w.write(p.int64(newCoVSize))
+        #Edges
+
+        #Normals
+        if vb.normalsStream:
+            w.seek(vb.normalsStream.posOffset)
+            if vb.realOffsets:
+                w.write(p.int64(newCoNOffset))
+            else:
+                w.write(p.int64(newCoVOffset))
+            w.seek(vb.normalsStream.posSize)
+            w.write(p.int64(newCoNSize))
+        #UVs
+        w.seek(vb.uvStream.posOffset)
+        if vb.realOffsets:
+            w.write(p.int64(newCoUOffset))
+        else:
+            w.write(p.int64(newCoVOffset))
+        w.seek(vb.uvStream.posSize)
+        w.write(p.int64(newCoUSize))
+        #Faces
+        w.seek(fb.posIndexCount)
+        w.write(p.int32(len(editedMesh.polygons)*3))
+        w.seek(md.stuffBlock.posOffset)
+        w.write(p.int32(len(editedMesh.polygons)*3))
+        w.seek(fb.posOffset)
+        w.write(p.int64(newCoFOffset))
+        w.seek(fb.posSize)
+        w.write(p.int64(newCoFSize))
+
+        # the place where new mesh block ends minus where it ended before
+        DiffOff = (newCoFOffset + newCoFSize) - (fb.faceDataOffset + fb.faceDataSize)
+        def AddDiff(pos,diff=DiffOff):
+            w.seek(pos)
+            oldOffset = r.int64(w)
+            w.seek(pos)
+            w.write(p.int64(oldOffset+diff))
+        def mdDiff(xmd):
+            # Vertex
+            if xmd.vertexBlock.vertexStream:
+                AddDiff(xmd.vertexBlock.vertexStream.posOffset)
+            # Edge
+            if xmd.edgeBlock:
+                AddDiff(xmd.edgeBlock.posOffset)
+            # Normals
+            if xmd.vertexBlock.normalsStream:
+                AddDiff(xmd.vertexBlock.normalsStream.posOffset)
+            # UV
+            if xmd.vertexBlock.uvStream:
+                AddDiff(xmd.vertexBlock.uvStream.posOffset)
+            # Faces
+            if xmd.faceBlock:
+                AddDiff(xmd.faceBlock.posOffset)
+
+        #Group are after Objects, so no need to add to objects.
+        if isGroup:
+            # Remaining mesh blocks of current Lod
+            for md in asset.LODGroups[Index].LODList[LODIndex].meshBlockList[BlockIndex + 1:]:
+                mdDiff(md)
+            # The following LODs
+            for l in asset.LODGroups[Index].LODList[LODIndex+1:]:
+                for md in l.meshBlockList:
+                    mdDiff(md)
+            #just in case there are other groups
+            for g in asset.LODGroups[Index+1:]:
+                for l in g.LODList:
+                    for md in l.meshBlockList:
+                        mdDiff(md)
+
+        else:
+            # Remaining mesh blocks of current Lod
+            for md in asset.LODObjects[Index].LODList[LODIndex].meshBlockList[BlockIndex + 1:]:
+                mdDiff(md)
+            # The following LODs
+            for l in asset.LODObjects.LODList[LODIndex + 1:]:
+                for md in l.meshBlockList:
+                    mdDiff(md)
+            # the other objects
+            for o in asset.LODObjects[Index + 1:]:
+                for l in o.LODList:
+                    for md in l.meshBlockList:
+                        mdDiff(md)
+            # do every md in every lod of every LODGroup
+            for g in asset.LODGroups:
+                for l in g.LODList:
+                    for md in l.meshBlockList:
+                        mdDiff(md)
+    # Delete Source Core
+    if os.path.exists(core + "MOD"):
+        os.remove(core+"MOD")
+        # Delete Source Stream
+        if os.path.exists(stream + "MOD"):
+            os.remove(stream + "MOD")
+
+    #Rename Core and Stream
+    os.rename(core + "TMP", core + "MOD")
+    os.rename(stream + "TMP", stream + "MOD")
+
 
 def IsMoveInScope(f,offset, size, desiredMove):
     current = f.tell()
@@ -1120,6 +1331,7 @@ class MeshInfo:
         r = ByteReader()
         f.seek(8,1)
         f.seek(16,1)
+        self.posVCount = f.tell()
         self.vertexCount = r.int32(f)
         f.seek(13,1)
 class MeshBlockInfo(DataBlock):
@@ -1147,6 +1359,8 @@ class StreamRef:
         self.streamPath = ""
         self.dataOffset = 0
         self.dataSize = 0
+        self.posOffset = 0
+        self.posSize = 0
 
         self.ParseStreamRef(f)
 
@@ -1164,7 +1378,9 @@ class StreamRef:
             f.seek(self.blockOffset+self.blockSize)
         else:
             self.streamPath = r.path(f,self.pathLength)
+            self.posOffset = f.tell()
             self.dataOffset = r.int64(f)
+            self.posSize = f.tell()
             self.dataSize = r.int64(f)
 
 class EdgeBlock(DataBlock):
@@ -1172,7 +1388,9 @@ class EdgeBlock(DataBlock):
         super().__init__(f)
         self.streamPath = ""
         self.EdgeDataOffset = 0
+        self.posOffset = 0
         self.EdgeDataSize = 0
+        self.posSize = 0
 
         self.ParseEdgeBlock(f)
 
@@ -1184,10 +1402,25 @@ class EdgeBlock(DataBlock):
         self.EdgeDataOffset = r.int64(f)
         self.EdgeDataSize = r.int64(f)
         self.EndBlock(f)
+class StuffBlock(DataBlock):
+    def __init__(self,f):
+        super().__init__(f)
+        self.faceIndexCount = 0
+        self.posOffset = 0
+
+        self.ParseBlock(f)
+
+    def ParseBlock(self,f):
+        r = ByteReader()
+        f.seek(87,1)
+        self.posOffset = f.tell()
+        self.faceIndexCount = r.int64(f)
+        self.EndBlock(f)
 class VertexBlock(DataBlock):
     def __init__(self,f):
         super().__init__(f)
         self.vertexCount = 0
+
         self.streamRefCount = 0
         self.inStream = True
         self.vertexStream = None
@@ -1196,12 +1429,21 @@ class VertexBlock(DataBlock):
         self.realOffsets = False
         self.hasVertexColor = False
         self.hasTwoUV = False
+        self.coHalf = False #vertex coordinate stored as 16bit float
+
+        #The positions at which the values are found
+        self.posVCount = 0
+
 
         self.ParseVertexBlock(f)
+        if self.inStream:
+            self.CheckCoHalf()
+        self.EndBlock(f)
 
     def ParseVertexBlock(self,f):
         r = ByteReader()
         f.seek(16,1)
+        self.posVCount = f.tell()
         self.vertexCount = r.int32(f)
         self.streamRefCount = r.int32(f)
         self.inStream = r.bool(f)
@@ -1223,22 +1465,40 @@ class VertexBlock(DataBlock):
             self.hasVertexColor = self.vertexCount * 8 < self.uvStream.dataSize
             self.hasTwoUV =self.vertexCount * 12 <= self.uvStream.dataSize
 
-        self.EndBlock(f)
+
+    def CheckCoHalf(self):
+        vOffset = self.vertexStream.dataOffset
+        HZDEditor = bpy.context.scene.HZDEditor
+        core = HZDEditor.HZDAbsPath
+        stream = core+".stream"
+
+        s = open(stream,'rb')
+        s.seek(vOffset)
+        s.seek(6,1)
+        if s.read(2) == b'\x00\x3C':
+            self.coHalf = True
+        else:
+            self.coHalf = False
+        s.close()
 class FaceBlock(DataBlock):
     def __init__(self,f):
         super().__init__(f)
         self.indexCount = 0
+        self.posIndexCount = 0
         self.inStream = True
         self.pathLength = 0
         self.streamPath = ""
         self.faceDataOffset = 0
         self.faceDataSize = 0
+        self.posOffset = 0
+        self.posSize = 0
 
         self.ParseFaceBlock(f)
 
     def ParseFaceBlock(self,f):
         r = ByteReader()
         f.seek(16, 1)
+        self.posIndexCount = f.tell()
         self.indexCount = r.int32(f)
         f.seek(8,1)
         self.inStream = r.bool(f)
@@ -1250,14 +1510,16 @@ class FaceBlock(DataBlock):
                 f.seek(self.blockStartOffset + self.size)
             else:
                 self.streamPath = r.path(f, self.pathLength)
+                self.posOffset = f.tell()
                 self.faceDataOffset = r.int64(f)
+                self.posSize = f.tell()
                 self.faceDataSize = r.int64(f)
         self.EndBlock(f)
 
 class MeshDataBlock:
     def __init__(self,f):
         self.edgeBlock = None
-        self.unknownBlock = None
+        self.stuffBlock = None
         self.vertexBlock = None
         self.faceBlock = None
 
@@ -1272,8 +1534,7 @@ class MeshDataBlock:
         print(f.tell())
         if IDCheck == 10234768860597628846:
             self.edgeBlock = EdgeBlock(f)
-        self.unknownBlock = DataBlock(f)
-        self.unknownBlock.EndBlock(f)
+        self.stuffBlock = StuffBlock(f)
         self.vertexBlock = VertexBlock(f)
         self.faceBlock = FaceBlock(f)
 
@@ -1684,13 +1945,13 @@ class ExportHZD(bpy.types.Operator):
     bl_idname = "object.export_hzd"
     bl_label = "Export"
 
-    # BlockIndexToLoad: bpy.props.IntProperty(
-    #     name='BIL',
-    #     default=0
-    # )
+    isGroup: bpy.props.BoolProperty()
+    Index: bpy.props.IntProperty()
+    LODIndex: bpy.props.IntProperty()
+    BlockIndex: bpy.props.IntProperty()
 
     def execute(self, context):
-        ExportMesh()
+        ExportMesh(self.isGroup,self.Index,self.LODIndex,self.BlockIndex)
         return {'FINISHED'}
 class HZDPanel(bpy.types.Panel):
     """Creates a Panel in the Scene Properties window"""
@@ -1731,6 +1992,10 @@ class HZDPanel(bpy.types.Panel):
                             Button.LODIndex = il
                             Button.BlockIndex = ib
                             Button = row.operator("object.export_hzd", icon='EXPORT')
+                            Button.isGroup = False
+                            Button.Index = io
+                            Button.LODIndex = il
+                            Button.BlockIndex = ib
                         else:
                             row.label(text="Not able to Import for now.")
 
@@ -1748,7 +2013,11 @@ class HZDPanel(bpy.types.Panel):
                             Button.LODIndex = il
                             Button.BlockIndex = ib
                             Button = row.operator("object.export_hzd", icon='EXPORT')
-                            # Button.Mesh = m
+                            Button.isGroup = True
+                            Button.Index = ig
+                            Button.LODIndex = il
+                            Button.BlockIndex = ib
+
                         else:
                             row.label(text="Not able to Import for now.")
 
