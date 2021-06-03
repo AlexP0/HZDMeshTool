@@ -1256,7 +1256,7 @@ class SearchForOffsets(bpy.types.Operator):
 class ImportHZD(bpy.types.Operator):
     """Imports the mesh"""
     bl_idname = "object.import_hzd"
-    bl_label = "Import"
+    bl_label = ""
 
     isGroup: bpy.props.BoolProperty()
     Index: bpy.props.IntProperty()
@@ -1266,6 +1266,24 @@ class ImportHZD(bpy.types.Operator):
 
     def execute(self, context):
         ImportMesh(self.isGroup,self.Index,self.LODIndex,self.BlockIndex)
+        return {'FINISHED'}
+class ImportLodHZD(bpy.types.Operator):
+    """Imports every mesh in the LOD"""
+    bl_idname = "object.import_lod_hzd"
+    bl_label = "Import"
+
+    isGroup: bpy.props.BoolProperty()
+    Index: bpy.props.IntProperty()
+    LODIndex: bpy.props.IntProperty()
+
+
+    def execute(self, context):
+        if self.isGroup:
+            for blockindex,block in enumerate(asset.LODGroups[self.Index].LODList[self.LODIndex].meshBlockList):
+                ImportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+        else:
+            for blockindex,block in enumerate(asset.LODObjects[self.Index].LODList[self.LODIndex].meshBlockList):
+                ImportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
         return {'FINISHED'}
 class ImportSkeleton(bpy.types.Operator):
     """Creates a skeleton"""
@@ -1278,7 +1296,7 @@ class ImportSkeleton(bpy.types.Operator):
 class ExportHZD(bpy.types.Operator):
     """Exports the mesh based on object name"""
     bl_idname = "object.export_hzd"
-    bl_label = "Export"
+    bl_label = ""
 
     isGroup: bpy.props.BoolProperty()
     Index: bpy.props.IntProperty()
@@ -1288,6 +1306,25 @@ class ExportHZD(bpy.types.Operator):
     def execute(self, context):
         ExportMesh(self.isGroup,self.Index,self.LODIndex,self.BlockIndex)
         return {'FINISHED'}
+class ExportLodHZD(bpy.types.Operator):
+    """Exports every mesh in the LOD"""
+    bl_idname = "object.export_lod_hzd"
+    bl_label = "Export"
+
+    isGroup: bpy.props.BoolProperty()
+    Index: bpy.props.IntProperty()
+    LODIndex: bpy.props.IntProperty()
+
+
+    def execute(self, context):
+        if self.isGroup:
+            for blockindex,block in enumerate(asset.LODGroups[self.Index].LODList[self.LODIndex].meshBlockList):
+                ExportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+        else:
+            for blockindex,block in enumerate(asset.LODObjects[self.Index].LODList[self.LODIndex].meshBlockList):
+                ExportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+        return {'FINISHED'}
+
 class HZDPanel(bpy.types.Panel):
     """Creates a Panel in the Scene Properties window"""
     bl_label = "Horizon Zero Dawn"
@@ -1313,11 +1350,25 @@ class HZDPanel(bpy.types.Panel):
         if BoneMatrices:
             row = layout.row()
             row.operator("object.import_skt",icon="ARMATURE_DATA")
+        mainRow = layout.row()
         if asset:
             for io, lo in enumerate(asset.LODObjects):
+                box = mainRow.box()
+                box.label(text="LOD OBJECT", icon='SNAP_VOLUME')
                 for il, l in enumerate(lo.LODList):
+                    lodBox = box.box()
+                    lodRow = lodBox.row()
+                    lodRow.label(text="LOD",icon='MOD_EXPLODE')
+                    LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
+                    LODImport.isGroup = False
+                    LODImport.Index = io
+                    LODImport.LODIndex = il
+                    LODExport = lodRow.operator("object.export_lod_hzd", icon='EXPORT')
+                    LODExport.isGroup = False
+                    LODExport.Index = io
+                    LODExport.LODIndex = il
                     for ib, m in enumerate(l.meshBlockList):
-                        row = layout.row()
+                        row = lodBox.row()
                         row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
                                   icon='MESH_ICOSPHERE')
                         if m.vertexBlock.inStream:
@@ -1336,9 +1387,22 @@ class HZDPanel(bpy.types.Panel):
 
 
             for ig,lg in enumerate(asset.LODGroups):
+                box = mainRow.box()
+                box.label(text="LOD GROUP", icon='STICKY_UVS_LOC')
                 for il,l in enumerate(lg.LODList):
+                    lodBox = box.box()
+                    lodRow = lodBox.row()
+                    lodRow.label(text="LOD", icon='MOD_EXPLODE')
+                    LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
+                    LODImport.isGroup = True
+                    LODImport.Index = ig
+                    LODImport.LODIndex = il
+                    LODExport = lodRow.operator("object.export_lod_hzd", icon='EXPORT')
+                    LODExport.isGroup = True
+                    LODExport.Index = ig
+                    LODExport.LODIndex = il
                     for  ib,m in enumerate(l.meshBlockList):
-                        row = layout.row()
+                        row = lodBox.row()
                         row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
                                   icon='MESH_ICOSPHERE')
                         if m.vertexBlock.inStream:
@@ -1376,8 +1440,10 @@ class HZDPanel(bpy.types.Panel):
 
 def register():
     bpy.utils.register_class(ImportHZD)
+    bpy.utils.register_class(ImportLodHZD)
     bpy.utils.register_class(ImportSkeleton)
     bpy.utils.register_class(ExportHZD)
+    bpy.utils.register_class(ExportLodHZD)
     bpy.utils.register_class(HZDSettings)
     bpy.utils.register_class(SearchForOffsets)
     bpy.types.Scene.HZDEditor = bpy.props.PointerProperty(type=HZDSettings)
@@ -1385,8 +1451,10 @@ def register():
 def unregister():
     bpy.utils.unregister_class(HZDPanel)
     bpy.utils.unregister_class(ImportHZD)
+    bpy.utils.unregister_class(ImportLodHZD)
     bpy.utils.unregister_class(ImportSkeleton)
     bpy.utils.unregister_class(ExportHZD)
+    bpy.utils.unregister_class(ExportLodHZD)
     bpy.utils.unregister_class(SearchForOffsets)
 if __name__ == "__main__":
     register()
