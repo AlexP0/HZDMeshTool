@@ -439,7 +439,7 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
             if index == -1:
                 index = len(biList[vindex]) - 1
                 # print(vindex, index,bwList[vindex][index])
-            print(len(CoreBones)-1,boneindex,"   ",len(bwList)-1,vindex)
+            # print(len(CoreBones)-1,boneindex,"   ",len(bwList)-1,vindex)
             obj.vertex_groups[CoreBones[boneindex]].add([vindex], bwList[vindex][index], "ADD")
 
 
@@ -458,7 +458,7 @@ def CreateSkeleton():
         f.seek(4,1)
         sktName = r.string(f,sktNameSize)
         boneCount = r.int32(f)
-        print(boneCount)
+        # print(boneCount)
         for b in range(boneCount):
             boneNameSize = r.int32(f)
             f.seek(4,1)
@@ -965,7 +965,7 @@ class StreamRef:
         self.stride = r.int32(f)
         unknownCount = r.int32(f)
         f.seek(16,1)
-        print(unknownCount)
+        # print(unknownCount)
         for i in range(unknownCount):
             f.seek(4,1)
         self.pathLength = r.int32(f)
@@ -1042,7 +1042,7 @@ class VertexBlock(DataBlock):
         self.vertexCount = r.int32(f)
         self.streamRefCount = r.int32(f)
         self.inStream = r.bool(f)
-        print(self.vertexCount,self.streamRefCount,self.inStream)
+        # print(self.vertexCount,self.streamRefCount,self.inStream)
         if self.inStream:
             self.vertexStream = StreamRef(f,self.blockStartOffset,self.size)
 
@@ -1122,11 +1122,11 @@ class MeshDataBlock:
 
     def ReadMeshBlock(self,f):
         r = ByteReader()
-        print(f.tell())
+        # print(f.tell())
         IDCheck = r.int64(f)
-        print(f.tell())
+        # print(f.tell())
         f.seek(-8,1)
-        print(f.tell())
+        # print(f.tell())
         if IDCheck == 10234768860597628846:
             self.edgeBlock = EdgeBlock(f)
         self.stuffBlock = StuffBlock(f)
@@ -1222,7 +1222,7 @@ class LODObject(DataBlock):
         for i in range(self.LODCount):
             lod = LOD(f)
             self.LODList.append(lod)
-            print("LOD", i,self.LODCount)
+            # print("LOD", i,self.LODCount)
 
 
 def ReadCoreFile():
@@ -1236,10 +1236,10 @@ def ReadCoreFile():
 
     with open(core, "rb") as f:
         while f.tell() < coresize:
-            print(f.tell(),coresize)
+            # print(f.tell(),coresize)
             ID = r.int64(f)
             f.seek(-8,1)
-            print(ID)
+            # print(ID)
             if ID == 6871768592993170868: # LOD Group Info
                 asset.LODGroups.append(LODGroup(f))
             elif ID == 7022335006738406101: # LOD Object Info
