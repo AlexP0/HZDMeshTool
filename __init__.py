@@ -1358,7 +1358,7 @@ class HZDPanel(bpy.types.Panel):
                 for il, l in enumerate(lo.LODList):
                     lodBox = box.box()
                     lodRow = lodBox.row()
-                    lodRow.label(text="LOD",icon='MOD_EXPLODE')
+                    lodRow.label(text="ELEMENT",icon='MATERIAL_DATA')
                     LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
                     LODImport.isGroup = False
                     LODImport.Index = io
