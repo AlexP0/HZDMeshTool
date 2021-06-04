@@ -136,6 +136,8 @@ class BytePacker:
 def FillChunk(f):
     offset = f.tell()
     remainder = abs(256-offset%256)
+    if remainder == 256:
+        remainder = 0
     bRem = b'\x00' * remainder
     f.write(bRem)
 
@@ -806,7 +808,7 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
             for md in asset.LODObjects[Index].LODList[LODIndex].meshBlockList[BlockIndex + 1:]:
                 mdDiff(md)
             # The following LODs
-            for l in asset.LODObjects.LODList[LODIndex + 1:]:
+            for l in asset.LODObjects[Index].LODList[LODIndex + 1:]:
                 for md in l.meshBlockList:
                     mdDiff(md)
             # the other objects
