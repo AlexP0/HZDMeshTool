@@ -2,7 +2,7 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 1, 0),
+    "version": (1, 1, 1),
     "blender": (2, 91, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -637,15 +637,19 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
     boneCount = len(bpy.data.objects[HZDEditor.SkeletonName].data.bones)
 
     # Check if there's already a modded file
-    if os.path.exists(core + "MOD"):
-        sourcecore = core + "MOD"
-        if os.path.exists(stream + "MOD"):
-            sourcestream = stream + "MOD"
-        else:
-            raise Exception("Modded Core but no Modded Stream")
-    else:
-        sourcecore = core
-        sourcestream = stream
+    # if os.path.exists(core + "MOD"):
+    #     sourcecore = core + "MOD"
+    #     if os.path.exists(stream + "MOD"):
+    #         sourcestream = stream + "MOD"
+    #     else:
+    #         raise Exception("Modded Core but no Modded Stream")
+    # else:
+    #     sourcecore = core
+    #     sourcestream = stream
+
+
+    sourcecore = core
+    sourcestream = stream
     coresize = os.path.getsize(sourcecore)
     streamsize = os.path.getsize(sourcestream)
 
@@ -766,15 +770,18 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
 
         # the place where new mesh block ends minus where it ended before
         DiffOff = (newCoFOffset + newCoFSize) - (fb.faceDataOffset + fb.faceDataSize)
+        print(DiffOff)
         def AddDiff(pos,diff=DiffOff):
-            w.seek(pos)
-            oldOffset = r.int64(w)
-            w.seek(pos)
-            w.write(p.int64(oldOffset+diff))
+            if pos != 0:
+                w.seek(pos)
+                oldOffset = r.int64(w)
+                w.seek(pos)
+                w.write(p.int64(oldOffset+diff))
         def mdDiff(xmd):
             # Vertex
             if xmd.vertexBlock.vertexStream:
                 AddDiff(xmd.vertexBlock.vertexStream.posOffset)
+                print(objectName,"  Vertex  ",xmd.vertexBlock.vertexStream.posOffset)
             # Edge
             if xmd.edgeBlock:
                 AddDiff(xmd.edgeBlock.posOffset)
@@ -822,15 +829,19 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
                     for md in l.meshBlockList:
                         mdDiff(md)
     # Delete Source Core
-    if os.path.exists(core + "MOD"):
-        os.remove(core+"MOD")
-        # Delete Source Stream
-        if os.path.exists(stream + "MOD"):
-            os.remove(stream + "MOD")
+    # if os.path.exists(core + "MOD"):
+    #     os.remove(core+"MOD")
+    #     # Delete Source Stream
+    #     if os.path.exists(stream + "MOD"):
+    #         os.remove(stream + "MOD")
 
     #Rename Core and Stream
-    os.rename(core + "TMP", core + "MOD")
-    os.rename(stream + "TMP", stream + "MOD")
+    # os.rename(core + "TMP", core + "MOD")
+    # os.rename(stream + "TMP", stream + "MOD")
+    os.remove(core)
+    os.remove(stream)
+    os.rename(core + "TMP", core)
+    os.rename(stream + "TMP", stream)
 
 class Asset:
     def __init__(self):
@@ -1322,9 +1333,13 @@ class ExportLodHZD(bpy.types.Operator):
         if self.isGroup:
             for blockindex,block in enumerate(asset.LODGroups[self.Index].LODList[self.LODIndex].meshBlockList):
                 ExportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+                ReadCoreFile()
+
         else:
             for blockindex,block in enumerate(asset.LODObjects[self.Index].LODList[self.LODIndex].meshBlockList):
                 ExportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+                ReadCoreFile()
+
         return {'FINISHED'}
 
 class HZDPanel(bpy.types.Panel):
