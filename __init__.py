@@ -2,8 +2,8 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 1, 1),
-    "blender": (2, 91, 0),
+    "version": (1, 2, 0),
+    "blender": (2, 93, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
     }
@@ -281,6 +281,23 @@ class HZDSettings(bpy.types.PropertyGroup):
     SkeletonPath: bpy.props.StringProperty(name="Skeleton Core",subtype='FILE_PATH', update=ClearProperties)
     SkeletonAbsPath : bpy.props.StringProperty()
     SkeletonName: bpy.props.StringProperty(name="Skeleton Name")
+    LodDistance0: bpy.props.FloatProperty(name="Lod Distance 0")
+    LodDistance1: bpy.props.FloatProperty(name="Lod Distance 1")
+    LodDistance2: bpy.props.FloatProperty(name="Lod Distance 2")
+    LodDistance3: bpy.props.FloatProperty(name="Lod Distance 3")
+    LodDistance4: bpy.props.FloatProperty(name="Lod Distance 4")
+    LodDistance5: bpy.props.FloatProperty(name="Lod Distance 5")
+    LodDistance6: bpy.props.FloatProperty(name="Lod Distance 6")
+    LodDistance7: bpy.props.FloatProperty(name="Lod Distance 7")
+    LodDistance8: bpy.props.FloatProperty(name="Lod Distance 8")
+    LodDistance9: bpy.props.FloatProperty(name="Lod Distance 9")
+    LodDistance10: bpy.props.FloatProperty(name="Lod Distance 10")
+    LodDistance11: bpy.props.FloatProperty(name="Lod Distance 11")
+    LodDistance12: bpy.props.FloatProperty(name="Lod Distance 12")
+    LodDistance13: bpy.props.FloatProperty(name="Lod Distance 13")
+    LodDistance14: bpy.props.FloatProperty(name="Lod Distance 14")
+    LodDistance15: bpy.props.FloatProperty(name="Lod Distance 15")
+
 
 def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     r = ByteReader()
@@ -770,7 +787,7 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
 
         # the place where new mesh block ends minus where it ended before
         DiffOff = (newCoFOffset + newCoFSize) - (fb.faceDataOffset + fb.faceDataSize)
-        print(DiffOff)
+        # print(DiffOff)
         def AddDiff(pos,diff=DiffOff):
             if pos != 0:
                 w.seek(pos)
@@ -781,7 +798,7 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
             # Vertex
             if xmd.vertexBlock.vertexStream:
                 AddDiff(xmd.vertexBlock.vertexStream.posOffset)
-                print(objectName,"  Vertex  ",xmd.vertexBlock.vertexStream.posOffset)
+                # print(objectName,"  Vertex  ",xmd.vertexBlock.vertexStream.posOffset)
             # Edge
             if xmd.edgeBlock:
                 AddDiff(xmd.edgeBlock.posOffset)
@@ -842,6 +859,30 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
     os.remove(stream)
     os.rename(core + "TMP", core)
     os.rename(stream + "TMP", stream)
+
+def SaveDistances(Index):
+    p = BytePacker()
+    HZDEditor = bpy.context.scene.HZDEditor
+    core = HZDEditor.HZDAbsPath
+
+    with open(core,'rb+') as w:
+        w.seek(asset.LODGroups[Index].blockStartOffset)
+        # print(w.tell())
+        r = ByteReader()
+        w.seek(16, 1)
+        r.hashtext(w)
+        w.seek(24, 1)
+        w.seek(8, 1)
+        w.seek(4,1)
+        w.seek(16, 1)
+        LODCount = r.int32(w)
+        # print(w.tell())
+        for i in range(LODCount):
+            w.seek(17, 1)
+            w.write(p.float(HZDEditor["LodDistance" + str(i)]))
+            # print(w.tell())
+
+
 
 class Asset:
     def __init__(self):
@@ -1193,11 +1234,13 @@ class LODGroup(DataBlock):
         self.totalMeshCount = 0
         self.LODCount = 0
         self.LODList = []
+        self.LODDistanceList = []
 
         self.ParseLODGroupInfo(f)
 
     def ParseLODGroupInfo(self,f):
         r = ByteReader()
+        HZDEditor = bpy.context.scene.HZDEditor
         f.seek(16,1)
         self.objectName = r.hashtext(f)
         f.seek(24,1)
@@ -1205,6 +1248,11 @@ class LODGroup(DataBlock):
         self.totalMeshCount = r.int32(f)
         f.seek(16,1)
         self.LODCount = r.int32(f)
+        for i in range(self.LODCount):
+            f.seek(17,1)
+            lodDistance = r.float(f)
+            HZDEditor["LodDistance" + str(i)] = lodDistance
+            self.LODDistanceList.append(lodDistance)
 
         self.EndBlock(f)
         for i in range(self.LODCount- len(asset.LODObjects)):
@@ -1341,6 +1389,17 @@ class ExportLodHZD(bpy.types.Operator):
                 ReadCoreFile()
 
         return {'FINISHED'}
+class SaveLodDistances(bpy.types.Operator):
+    """Save all LOD Distances"""
+    bl_idname = "object.savedistances"
+    bl_label = "Save LOD Distances"
+
+    Index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        SaveDistances( self.Index)
+        return {'FINISHED'}
+
 
 class HZDPanel(bpy.types.Panel):
     """Creates a Panel in the Scene Properties window"""
@@ -1406,10 +1465,14 @@ class HZDPanel(bpy.types.Panel):
             for ig,lg in enumerate(asset.LODGroups):
                 box = mainRow.box()
                 box.label(text="LOD GROUP", icon='STICKY_UVS_LOC')
+                saveDistances = box.operator("object.savedistances")
+                saveDistances.Index = ig
                 for il,l in enumerate(lg.LODList):
                     lodBox = box.box()
                     lodRow = lodBox.row()
                     lodRow.label(text="LOD", icon='MOD_EXPLODE')
+
+
                     LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
                     LODImport.isGroup = True
                     LODImport.Index = ig
@@ -1418,6 +1481,9 @@ class HZDPanel(bpy.types.Panel):
                     LODExport.isGroup = True
                     LODExport.Index = ig
                     LODExport.LODIndex = il
+
+                    disRow = lodBox.row()
+                    disRow.prop(HZDEditor,"LodDistance"+str(il))
                     for  ib,m in enumerate(l.meshBlockList):
                         row = lodBox.row()
                         row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
@@ -1461,6 +1527,7 @@ def register():
     bpy.utils.register_class(ImportSkeleton)
     bpy.utils.register_class(ExportHZD)
     bpy.utils.register_class(ExportLodHZD)
+    bpy.utils.register_class(SaveLodDistances)
     bpy.utils.register_class(HZDSettings)
     bpy.utils.register_class(SearchForOffsets)
     bpy.types.Scene.HZDEditor = bpy.props.PointerProperty(type=HZDSettings)
@@ -1472,6 +1539,7 @@ def unregister():
     bpy.utils.unregister_class(ImportSkeleton)
     bpy.utils.unregister_class(ExportHZD)
     bpy.utils.unregister_class(ExportLodHZD)
+    bpy.utils.unregister_class(SaveLodDistances)
     bpy.utils.unregister_class(SearchForOffsets)
 if __name__ == "__main__":
     register()
