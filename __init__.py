@@ -1427,14 +1427,52 @@ class HZDPanel(bpy.types.Panel):
             row = layout.row()
             row.operator("object.import_skt",icon="ARMATURE_DATA")
         mainRow = layout.row()
+
+class LODDistancePanel(bpy.types.Panel):
+    bl_label = "LOD Distances"
+    bl_idname = "OBJECT_PT_loddist"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+    bl_parent_id = "OBJECT_PT_hzdpanel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
         if asset:
+            layout = self.layout
+            HZDEditor = context.scene.HZDEditor
+            mainRow = layout.row()
+            for ig, lg in enumerate(asset.LODGroups):
+                box = mainRow.box()
+                box.label(text="LOD DISTANCES", icon='OPTIONS')
+                saveDistances = box.operator("object.savedistances")
+                saveDistances.Index = ig
+                for il, l in enumerate(lg.LODList):
+                    lodBox = box.box()
+                    disRow = lodBox.row()
+                    disRow.prop(HZDEditor, "LodDistance" + str(il))
+
+class LodObjectPanel(bpy.types.Panel):
+    bl_label = "LOD Objects"
+    bl_idname = "OBJECT_PT_lodobject"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+    bl_parent_id = "OBJECT_PT_hzdpanel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        if asset:
+            layout = self.layout
+            HZDEditor = context.scene.HZDEditor
+            mainRow = layout.row()
             for io, lo in enumerate(asset.LODObjects):
                 box = mainRow.box()
                 box.label(text="LOD OBJECT", icon='SNAP_VOLUME')
                 for il, l in enumerate(lo.LODList):
                     lodBox = box.box()
                     lodRow = lodBox.row()
-                    lodRow.label(text="ELEMENT",icon='MATERIAL_DATA')
+                    lodRow.label(text="ELEMENT", icon='MATERIAL_DATA')
                     LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
                     LODImport.isGroup = False
                     LODImport.Index = io
@@ -1461,17 +1499,28 @@ class HZDPanel(bpy.types.Panel):
                         else:
                             row.label(text="Not able to Import for now.")
 
+class LodGroupPanel(bpy.types.Panel):
+    bl_label = "LOD Groups"
+    bl_idname = "OBJECT_PT_lodgroup"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+    bl_parent_id = "OBJECT_PT_hzdpanel"
+    bl_options = {"DEFAULT_CLOSED"}
 
-            for ig,lg in enumerate(asset.LODGroups):
+    def draw(self, context):
+        if asset:
+            layout = self.layout
+            HZDEditor = context.scene.HZDEditor
+            mainRow = layout.row()
+            for ig, lg in enumerate(asset.LODGroups):
                 box = mainRow.box()
                 box.label(text="LOD GROUP", icon='STICKY_UVS_LOC')
-                saveDistances = box.operator("object.savedistances")
-                saveDistances.Index = ig
-                for il,l in enumerate(lg.LODList):
+
+                for il, l in enumerate(lg.LODList):
                     lodBox = box.box()
                     lodRow = lodBox.row()
                     lodRow.label(text="LOD", icon='MOD_EXPLODE')
-
 
                     LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
                     LODImport.isGroup = True
@@ -1482,9 +1531,7 @@ class HZDPanel(bpy.types.Panel):
                     LODExport.Index = ig
                     LODExport.LODIndex = il
 
-                    disRow = lodBox.row()
-                    disRow.prop(HZDEditor,"LodDistance"+str(il))
-                    for  ib,m in enumerate(l.meshBlockList):
+                    for ib, m in enumerate(l.meshBlockList):
                         row = lodBox.row()
                         row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
                                   icon='MESH_ICOSPHERE')
@@ -1503,24 +1550,6 @@ class HZDPanel(bpy.types.Panel):
                         else:
                             row.label(text="Not able to Import for now.")
 
-
-
-
-        # for i,mb in enumerate(MeshBlocks):
-        #     row = layout.row()
-        #     if not mb.HasNormalData or mb.IsInCore or mb.HasUnknownData:
-        #         mbIcon = "ERROR"
-        #     else:
-        #         mbIcon = 'MESH_ICOSPHERE'
-        #     row.label(text=str(i)+"_"+mb.MeshName+" "+str(mb.vCount), icon=mbIcon)
-        #     if mb.IsInCore:
-        #         row.label(text="Not able to import for now")
-        #     else:
-        #         Button = row.operator("object.import_hzd",icon='IMPORT')
-        #         Button.BlockIndexToLoad = i
-        #         Button = row.operator("object.export_hzd", icon='EXPORT')
-        #         Button.BlockIndexToLoad = i
-
 def register():
     bpy.utils.register_class(ImportHZD)
     bpy.utils.register_class(ImportLodHZD)
@@ -1532,8 +1561,14 @@ def register():
     bpy.utils.register_class(SearchForOffsets)
     bpy.types.Scene.HZDEditor = bpy.props.PointerProperty(type=HZDSettings)
     bpy.utils.register_class(HZDPanel)
+    bpy.utils.register_class(LODDistancePanel)
+    bpy.utils.register_class(LodObjectPanel)
+    bpy.utils.register_class(LodGroupPanel)
 def unregister():
     bpy.utils.unregister_class(HZDPanel)
+    bpy.utils.unregister_class(LODDistancePanel)
+    bpy.utils.unregister_class(LodObjectPanel)
+    bpy.utils.unregister_class(LodGroupPanel)
     bpy.utils.unregister_class(ImportHZD)
     bpy.utils.unregister_class(ImportLodHZD)
     bpy.utils.unregister_class(ImportSkeleton)
