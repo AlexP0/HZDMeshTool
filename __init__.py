@@ -2,7 +2,7 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 2, 0),
+    "version": (1, 2, 1),
     "blender": (2, 93, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -181,6 +181,9 @@ def Parse4x4Matrix(f):
     return matrix
 def ParseVertex(f,stride,half=False,boneCount=0):
     r = ByteReader()
+    startOffset = f.tell()
+    endOffset = startOffset+stride
+
     #Positions
     if half:
         coLength = 8
@@ -199,8 +202,11 @@ def ParseVertex(f,stride,half=False,boneCount=0):
     if boneCount >= 256:
         bic = (stride - coLength)/3
         if bic - int(bic) != 0:
-            bic = (stride - coLength)/2
-            noWeight = True
+            if stride == 32:
+                bic = 8
+            else:
+                bic = (stride - coLength)/2
+                noWeight = True
         bint16 = True
     else:
         bic = (stride - coLength)/2 #bone indices count
@@ -231,7 +237,7 @@ def ParseVertex(f,stride,half=False,boneCount=0):
                 # vw = vw*(-1)+1
             boneWeights.append(vw)
     if not noWeight:
-        f.seek(int(bic - len(boneIndices)),1)
+        f.seek(endOffset)
     return (x,y,z),boneIndices,boneWeights
 def ParseNormals(f):
     r = ByteReader()
@@ -448,21 +454,27 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     for bone in CoreBones: #Create vertex Groups
         obj.vertex_groups.new(name=bone)
     # deform_layer = bm.verts.layers.deform.new()
-    armature = bpy.data.objects[HZDEditor.SkeletonName].data
+    armature = bpy.data.objects[HZDEditor.SkeletonName]
     for v in mesh.vertices:
         vindex = v.index
-        # print(vindex, biList[vindex],bwList[vindex])
+
         for index, boneindex in enumerate(biList[vindex]):
-            # print(len(biList[vindex])-1- index, "=", len(biList[vindex]), "-", index)
+
             index = index - 1
             if index == -1:
                 index = len(biList[vindex]) - 1
-                # print(vindex, index,bwList[vindex][index])
-            # print(len(CoreBones)-1,boneindex,"   ",len(bwList)-1,vindex)
-            obj.vertex_groups[CoreBones[boneindex]].add([vindex], bwList[vindex][index], "ADD")
+            if len(CoreBones)>boneindex:
+                coreBone = CoreBones[boneindex] #Using the order from the skeleton file, boneindex gives the correct bone name.
+                weight = bwList[vindex][index] #BoneWeight for the current vertex(vindex), index gives the
+                obj.vertex_groups[coreBone].add([vindex], weight, "ADD")
+            else:
+                raise Exception("Vertex wasn't parsed correctly.{v} is not a bone".format(v=boneindex))
 
 
     bpy.context.collection.objects.link(obj)
+    obj.modifiers.new(name='Skeleton', type='ARMATURE')
+    obj.modifiers['Skeleton'].object = armature
+    obj.parent = armature
 
 def CreateSkeleton():
     r = ByteReader()
@@ -526,7 +538,12 @@ def PackVertex(f,vertex,stride,half=False,boneCount=0):
         bVertex += p.float(z)
     # Bone Indices
     if boneCount >= 256:
-        bic = int((stride - coLength) / 3)
+        bic = (stride - coLength) / 3
+        if bic - int(bic) != 0:
+            if stride == 32:
+                bic = 8
+            else:
+                bic = (stride - coLength) / 2
         bint16 = True
     else:
         bic = int((stride - coLength) / 2)  # bone indices count
@@ -536,6 +553,7 @@ def PackVertex(f,vertex,stride,half=False,boneCount=0):
     for vg in vertex.groups:
         if vg.weight > 0.0:
             groupsweights[vg.group] = vg.weight
+    # print(groupsweights)
     #Normalize
     totalweight = 0.0
     for gw in groupsweights:
@@ -576,13 +594,13 @@ def PackVertex(f,vertex,stride,half=False,boneCount=0):
     else:
         vbLength = coLength + bic + bic
     # print(vbLength,len(bVertex))
-    for b in range(len(bVertex),vbLength):
+    for b in range(len(bVertex),stride):
         bVertex += b'\x00'
     # print(bic, boneRepeat,len(bVertex))
-    if len(bVertex) == vbLength:
+    if len(bVertex) == stride:
         f.write(bVertex)
     else:
-        raise Exception("Vertex bytes not expected length:{v} instead of {e}".format(v=len(bVertex),e=vbLength))
+        raise Exception("Vertex bytes not expected length:{v} instead of {e}".format(v=len(bVertex),e=stride))
 def PackNormal(f,ntb,stride):
     p = BytePacker()
     bNormals = b''
