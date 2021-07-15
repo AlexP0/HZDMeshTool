@@ -2,7 +2,7 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 2, 1),
+    "version": (1, 2, 2),
     "blender": (2, 93, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -21,6 +21,11 @@ import operator
 
 BoneMatrices = {}
 
+##TO DO
+# - Add Static Mesh support
+##### - Find textures used by object
+# - Extract files directly from .bin file
+# - Convert textures to dds
 
 
 def ClearProperties(self,context):
@@ -320,9 +325,15 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     coresize = os.path.getsize(core)
     boneCount = len(bpy.data.objects[HZDEditor.SkeletonName].data.bones)
 
-    print(meshName,"Real Offsets = ",md.vertexBlock.realOffsets, "vOffset = ",md.vertexBlock.vertexStream.dataOffset, "vStride = ", md.vertexBlock.vertexStream.stride)
-
-    print(md.vertexBlock.vertexCount)
+    # print(meshName,"Real Offsets = ",md.vertexBlock.realOffsets, "vOffset = ",md.vertexBlock.vertexStream.dataOffset, "vStride = ", md.vertexBlock.vertexStream.stride)
+    # for a in asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex].shaderBlockInfos:
+    #     for b in a.textureRefs:
+    #         print(b.texPath)
+    # textures = asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex].GetUniqueTexturesOfMatIndex()
+    # for t in textures:
+    #     print(t)
+    print(meshName)
+    # print(md.vertexBlock.vertexCount)
 
     with open(stream,'rb') as f:
         #VERTICES
@@ -1205,21 +1216,75 @@ class MeshDataBlock:
         self.vertexBlock = VertexBlock(f)
         self.faceBlock = FaceBlock(f)
 
-class ShaderBlock(DataBlock):
+class TextureRef():
+    def __init__(self,f):
+        self.texPath = ""
+
+        r = ByteReader()
+        f.seek(16,1)
+        indicator = r.int8(f)
+        f.seek(16,1)
+        if indicator == 2:
+            self.texPath = r.hashtext(f)
+        f.seek(16,1)
+
+class ShaderBlockInfo():
+    def __init__(self,f):
+        self.textureRefs = []
+
+        self.ParseShaderInfo(f)
+
+    def ParseShaderInfo(self,f):
+        r = ByteReader()
+        f.seek(19,1)
+        bCount = r.int32(f)
+        for b in range(bCount):
+            f.seek(2,1)
+        cCount = r.int32(f)
+        for c in range(cCount):
+            f.seek(8,1)
+        f.seek(23,1)
+        texRefCount = r.int32(f)
+        for tex in range(texRefCount):
+            self.textureRefs.append(TextureRef(f))
+        gCount = r.int32(f)
+        for g in range(gCount):
+            f.seek(9,1)
+            f.seek(16,1)
+            f.seek(8,1)
+        f.seek(25,1)
+
+class MaterialBlock(DataBlock):
     def __init__(self,f):
         super().__init__(f)
         self.shaderName = ""
         self.subshaderCount = 0
+        self.shaderBlockInfos = []
+        self.ui_ShowTextures = False
+        self.uniqueTextures = []
 
-        self.ParseShaderBlock(f)
+        self.ParseMaterialBlock(f)
+        self.GetUniqueTexturesOfMatIndex()
 
-    def ParseShaderBlock(self,f):
+    def ParseMaterialBlock(self,f):
         r = ByteReader()
         f.seek(16,1)
         self.shaderName = r.hashtext(f)
         f.seek(4,1)
         self.subshaderCount = r.int32(f)
+        for s in range(self.subshaderCount):
+            self.shaderBlockInfos.append(ShaderBlockInfo(f))
+
         self.EndBlock(f)
+
+    def GetUniqueTexturesOfMatIndex(self):
+        for info in self.shaderBlockInfos:
+            for tr in info.textureRefs:
+                tp = tr.texPath
+                if tp != "":
+                    if tp not in self.uniqueTextures:
+                        self.uniqueTextures.append(tp)
+        return self.uniqueTextures
 
 class LOD:
     def __init__(self,f):
@@ -1229,22 +1294,24 @@ class LOD:
         self.unknownBlock.EndBlock(f)
         self.meshBlockInfo = MeshBlockInfo(f)
         self.meshBlockList = []
-        self.shaderBlockList = []
+        self.materialBlockList = []
 
 
         for i in range(self.meshBlockInfo.meshBlockCount):
             self.meshBlockList.append(MeshDataBlock(f))
         for i in range(self.meshBlockInfo.meshBlockCount):
-            shader = ShaderBlock(f)
+            material = MaterialBlock(f)
             c = 0
-            while c < shader.subshaderCount:
+            while c < material.subshaderCount:
                 db = DataBlock(f)
                 if db.ID == 17501462827539052646: #Color Ramp
                     pass
                 else:
                     c = c+1
                 db.EndBlock(f)
-            self.shaderBlockList.append(shader)
+            self.materialBlockList.append(material)
+
+
 class LODGroup(DataBlock):
     def __init__(self, f):
         super().__init__(f)
@@ -1418,6 +1485,25 @@ class SaveLodDistances(bpy.types.Operator):
         SaveDistances( self.Index)
         return {'FINISHED'}
 
+class ShowUsedTextures(bpy.types.Operator):
+    """Show used texture paths for the mesh block"""
+    bl_idname = "object.usedtextures"
+    bl_label = ""
+
+    isGroup: bpy.props.BoolProperty()
+    Index: bpy.props.IntProperty()
+    LODIndex: bpy.props.IntProperty()
+    BlockIndex: bpy.props.IntProperty()
+
+    def execute(self,context):
+        if self.isGroup:
+            mat = asset.LODGroups[self.Index].LODList[self.LODIndex].materialBlockList[self.BlockIndex]
+            mat.ui_ShowTextures = not mat.ui_ShowTextures
+        else:
+            mat = asset.LODObjects[self.Index].LODList[self.LODIndex].materialBlockList[self.BlockIndex]
+            mat.ui_ShowTextures = not mat.ui_ShowTextures
+
+        return {'FINISHED'}
 
 class HZDPanel(bpy.types.Panel):
     """Creates a Panel in the Scene Properties window"""
@@ -1504,6 +1590,17 @@ class LodObjectPanel(bpy.types.Panel):
                         row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
                                   icon='MESH_ICOSPHERE')
                         if m.vertexBlock.inStream:
+                            if l.materialBlockList[ib].ui_ShowTextures:
+                                texIcon = 'UV'
+                            else:
+                                texIcon = 'TEXTURE'
+
+                            texButton = row.operator("object.usedtextures", icon=texIcon)
+                            texButton.isGroup = True
+                            texButton.Index = io
+                            texButton.LODIndex = il
+                            texButton.BlockIndex = ib
+
                             Button = row.operator("object.import_hzd", icon='IMPORT')
                             Button.isGroup = False
                             Button.Index = io
@@ -1514,6 +1611,14 @@ class LodObjectPanel(bpy.types.Panel):
                             Button.Index = io
                             Button.LODIndex = il
                             Button.BlockIndex = ib
+
+                            if l.materialBlockList[ib].ui_ShowTextures:
+                                texBox = lodBox.box()
+
+                                for t in l.materialBlockList[ib].uniqueTextures:
+                                    texRow = texBox.row()
+                                    texRow.label(text=t)
+
                         else:
                             row.label(text="Not able to Import for now.")
 
@@ -1554,6 +1659,17 @@ class LodGroupPanel(bpy.types.Panel):
                         row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
                                   icon='MESH_ICOSPHERE')
                         if m.vertexBlock.inStream:
+                            if l.materialBlockList[ib].ui_ShowTextures:
+                                texIcon = 'UV'
+                            else:
+                                texIcon = 'TEXTURE'
+
+                            texButton = row.operator("object.usedtextures", icon=texIcon)
+                            texButton.isGroup = True
+                            texButton.Index = ig
+                            texButton.LODIndex = il
+                            texButton.BlockIndex = ib
+
                             Button = row.operator("object.import_hzd", icon='IMPORT')
                             Button.isGroup = True
                             Button.Index = ig
@@ -1564,6 +1680,13 @@ class LodGroupPanel(bpy.types.Panel):
                             Button.Index = ig
                             Button.LODIndex = il
                             Button.BlockIndex = ib
+
+                            if l.materialBlockList[ib].ui_ShowTextures:
+                                texBox = lodBox.box()
+
+                                for t in l.materialBlockList[ib].uniqueTextures:
+                                    texRow = texBox.row()
+                                    texRow.label(text=t)
 
                         else:
                             row.label(text="Not able to Import for now.")
@@ -1582,6 +1705,7 @@ def register():
     bpy.utils.register_class(LODDistancePanel)
     bpy.utils.register_class(LodObjectPanel)
     bpy.utils.register_class(LodGroupPanel)
+    bpy.utils.register_class(ShowUsedTextures)
 def unregister():
     bpy.utils.unregister_class(HZDPanel)
     bpy.utils.unregister_class(LODDistancePanel)
@@ -1594,5 +1718,6 @@ def unregister():
     bpy.utils.unregister_class(ExportLodHZD)
     bpy.utils.unregister_class(SaveLodDistances)
     bpy.utils.unregister_class(SearchForOffsets)
+    bpy.utils.unregister_class(ShowUsedTextures)
 if __name__ == "__main__":
     register()
