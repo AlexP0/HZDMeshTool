@@ -8,6 +8,20 @@ bl_info = {
     "category": "Import-Export"
     }
 
+
+def install_Package():
+    import subprocess
+    import sys
+    import os
+
+    python_exe = os.path.join(sys.prefix, 'bin', 'python.exe')
+
+    subprocess.call([python_exe, "-m", "ensurepip"])
+    subprocess.call([python_exe, "-m", "pip", "install", "--upgrade", "pip"])
+
+    subprocess.call([python_exe, "-m", "pip", "install", "mmh3"])
+# install_Package()
+
 import bpy
 import bmesh
 import os
@@ -17,20 +31,337 @@ import math
 import numpy as np
 import mathutils
 import operator
+import mmh3
 
+import ctypes
+from ctypes import c_size_t, c_char_p, c_int32, c_uint64, c_void_p
+from pathlib import Path
+from typing import Union, Dict, List, Set
+from enum import IntEnum
+
+class DXGI(IntEnum):
+    DXGI_FORMAT_UNKNOWN = 0,
+    DXGI_FORMAT_R32G32B32A32_TYPELESS = 1,
+    DXGI_FORMAT_R32G32B32A32_FLOAT = 2,
+    DXGI_FORMAT_R32G32B32A32_UINT = 3,
+    DXGI_FORMAT_R32G32B32A32_SINT = 4,
+    DXGI_FORMAT_R32G32B32_TYPELESS = 5,
+    DXGI_FORMAT_R32G32B32_FLOAT = 6,
+    DXGI_FORMAT_R32G32B32_UINT = 7,
+    DXGI_FORMAT_R32G32B32_SINT = 8,
+    DXGI_FORMAT_R16G16B16A16_TYPELESS = 9,
+    DXGI_FORMAT_R16G16B16A16_FLOAT = 10,
+    DXGI_FORMAT_R16G16B16A16_UNORM = 11,
+    DXGI_FORMAT_R16G16B16A16_UINT = 12,
+    DXGI_FORMAT_R16G16B16A16_SNORM = 13,
+    DXGI_FORMAT_R16G16B16A16_SINT = 14,
+    DXGI_FORMAT_R32G32_TYPELESS = 15,
+    DXGI_FORMAT_R32G32_FLOAT = 16,
+    DXGI_FORMAT_R32G32_UINT = 17,
+    DXGI_FORMAT_R32G32_SINT = 18,
+    DXGI_FORMAT_R32G8X24_TYPELESS = 19,
+    DXGI_FORMAT_D32_FLOAT_S8X24_UINT = 20,
+    DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS = 21,
+    DXGI_FORMAT_X32_TYPELESS_G8X24_UINT = 22,
+    DXGI_FORMAT_R10G10B10A2_TYPELESS = 23,
+    DXGI_FORMAT_R10G10B10A2_UNORM = 24,
+    DXGI_FORMAT_R10G10B10A2_UINT = 25,
+    DXGI_FORMAT_R11G11B10_FLOAT = 26,
+    DXGI_FORMAT_R8G8B8A8_TYPELESS = 27,
+    DXGI_FORMAT_R8G8B8A8_UNORM = 28,
+    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB = 29,
+    DXGI_FORMAT_R8G8B8A8_UINT = 30,
+    DXGI_FORMAT_R8G8B8A8_SNORM = 31,
+    DXGI_FORMAT_R8G8B8A8_SINT = 32,
+    DXGI_FORMAT_R16G16_TYPELESS = 33,
+    DXGI_FORMAT_R16G16_FLOAT = 34,
+    DXGI_FORMAT_R16G16_UNORM = 35,
+    DXGI_FORMAT_R16G16_UINT = 36,
+    DXGI_FORMAT_R16G16_SNORM = 37,
+    DXGI_FORMAT_R16G16_SINT = 38,
+    DXGI_FORMAT_R32_TYPELESS = 39,
+    DXGI_FORMAT_D32_FLOAT = 40,
+    DXGI_FORMAT_R32_FLOAT = 41,
+    DXGI_FORMAT_R32_UINT = 42,
+    DXGI_FORMAT_R32_SINT = 43,
+    DXGI_FORMAT_R24G8_TYPELESS = 44,
+    DXGI_FORMAT_D24_UNORM_S8_UINT = 45,
+    DXGI_FORMAT_R24_UNORM_X8_TYPELESS = 46,
+    DXGI_FORMAT_X24_TYPELESS_G8_UINT = 47,
+    DXGI_FORMAT_R8G8_TYPELESS = 48,
+    DXGI_FORMAT_R8G8_UNORM = 49,
+    DXGI_FORMAT_R8G8_UINT = 50,
+    DXGI_FORMAT_R8G8_SNORM = 51,
+    DXGI_FORMAT_R8G8_SINT = 52,
+    DXGI_FORMAT_R16_TYPELESS = 53,
+    DXGI_FORMAT_R16_FLOAT = 54,
+    DXGI_FORMAT_D16_UNORM = 55,
+    DXGI_FORMAT_R16_UNORM = 56,
+    DXGI_FORMAT_R16_UINT = 57,
+    DXGI_FORMAT_R16_SNORM = 58,
+    DXGI_FORMAT_R16_SINT = 59,
+    DXGI_FORMAT_R8_TYPELESS = 60,
+    DXGI_FORMAT_R8_UNORM = 61,
+    DXGI_FORMAT_R8_UINT = 62,
+    DXGI_FORMAT_R8_SNORM = 63,
+    DXGI_FORMAT_R8_SINT = 64,
+    DXGI_FORMAT_A8_UNORM = 65,
+    DXGI_FORMAT_R1_UNORM = 66,
+    DXGI_FORMAT_R9G9B9E5_SHAREDEXP = 67,
+    DXGI_FORMAT_R8G8_B8G8_UNORM = 68,
+    DXGI_FORMAT_G8R8_G8B8_UNORM = 69,
+    DXGI_FORMAT_BC1_TYPELESS = 70,
+    DXGI_FORMAT_BC1_UNORM = 71,
+    DXGI_FORMAT_BC1_UNORM_SRGB = 72,
+    DXGI_FORMAT_BC2_TYPELESS = 73,
+    DXGI_FORMAT_BC2_UNORM = 74,
+    DXGI_FORMAT_BC2_UNORM_SRGB = 75,
+    DXGI_FORMAT_BC3_TYPELESS = 76,
+    DXGI_FORMAT_BC3_UNORM = 77,
+    DXGI_FORMAT_BC3_UNORM_SRGB = 78,
+    DXGI_FORMAT_BC4_TYPELESS = 79,
+    DXGI_FORMAT_BC4_UNORM = 80,
+    DXGI_FORMAT_BC4_SNORM = 81,
+    DXGI_FORMAT_BC5_TYPELESS = 82,
+    DXGI_FORMAT_BC5_UNORM = 83,
+    DXGI_FORMAT_BC5_SNORM = 84,
+    DXGI_FORMAT_B5G6R5_UNORM = 85,
+    DXGI_FORMAT_B5G5R5A1_UNORM = 86,
+    DXGI_FORMAT_B8G8R8A8_UNORM = 87,
+    DXGI_FORMAT_B8G8R8X8_UNORM = 88,
+    DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM = 89,
+    DXGI_FORMAT_B8G8R8A8_TYPELESS = 90,
+    DXGI_FORMAT_B8G8R8A8_UNORM_SRGB = 91,
+    DXGI_FORMAT_B8G8R8X8_TYPELESS = 92,
+    DXGI_FORMAT_B8G8R8X8_UNORM_SRGB = 93,
+    DXGI_FORMAT_BC6H_TYPELESS = 94,
+    DXGI_FORMAT_BC6H_UF16 = 95,
+    DXGI_FORMAT_BC6H_SF16 = 96,
+    DXGI_FORMAT_BC7_TYPELESS = 97,
+    DXGI_FORMAT_BC7_UNORM = 98,
+    DXGI_FORMAT_BC7_UNORM_SRGB = 99,
+    DXGI_FORMAT_AYUV = 100,
+    DXGI_FORMAT_Y410 = 101,
+    DXGI_FORMAT_Y416 = 102,
+    DXGI_FORMAT_NV12 = 103,
+    DXGI_FORMAT_P010 = 104,
+    DXGI_FORMAT_P016 = 105,
+    DXGI_FORMAT_420_OPAQUE = 106,
+    DXGI_FORMAT_YUY2 = 107,
+    DXGI_FORMAT_Y210 = 108,
+    DXGI_FORMAT_Y216 = 109,
+    DXGI_FORMAT_NV11 = 110,
+    DXGI_FORMAT_AI44 = 111,
+    DXGI_FORMAT_IA44 = 112,
+    DXGI_FORMAT_P8 = 113,
+    DXGI_FORMAT_A8P8 = 114,
+    DXGI_FORMAT_B4G4R4A4_UNORM = 115,
+    DXGI_FORMAT_P208 = 130,
+    DXGI_FORMAT_V208 = 131,
+    DXGI_FORMAT_V408 = 132,
+    DXGI_FORMAT_FORCE_UINT = 0xffffffff
 
 BoneMatrices = {}
 
-##TO DO
-# - Add Static Mesh support
-##### - Find textures used by object
-# - Extract files directly from .bin file
-# - Convert textures to dds
 
+class ArchiveManager:
+    class BinHeader:
+        def __init__(self):
+            self.version = 0
+            self.key = 0
+            self.filesize = 0
+            self.datasize = 0
+            self.filecount = 0
+            self.chunkcount = 0
+            self.maxchunksize = 0
+
+        def parse(self, f):
+            r = ByteReader
+            self.version = r.int32(f)
+            self.key = r.int32(f)
+            self.filesize = r.int64(f)
+            self.datasize = r.int64(f)
+            self.filecount = r.int64(f)
+            self.chunkcount = r.int32(f)
+            self.maxchunksize = r.int32(f)
+
+        def print(self):
+            print("Header", "\n",
+                  "Ver = ", self.version, "\n",
+                  "Key = ", self.key, "\n",
+                  "FileSize = ", self.filesize, "\n",
+                  "DataSize = ", self.datasize, "\n",
+                  "FileCount = ", self.filecount, "\n",
+                  "ChunkCount = ", self.chunkcount, "\n",
+                  "MaxChunkSize =", self.maxchunksize)
+    class FileEntry:
+        def __init__(self):
+            self.id = 0
+            self.key0 = 0
+            self.hash = 0
+            self.offset = 0
+            self.size = 0
+            self.key1 = 0
+
+        def parse(self, f):
+            r = ByteReader
+            self.id = r.int32(f)
+            self.key0 = r.int32(f)
+            self.hash = r.int64(f)
+            self.offset = r.int64(f)
+            self.size = r.int32(f)
+            self.key1 = r.int32(f)
+
+        def print(self):
+            print("File", "\n",
+                  "ID = ", self.id, "\n",
+                  "Key0 = ", self.key0, "\n",
+                  "Hash = ", self.hash, "\n",
+                  "Offset = ", self.offset, "\n",
+                  "Size = ", self.size, "\n",
+                  "Key1 = ", self.key1, "\n")
+    class ChunkEntry:
+        def __init__(self):
+            self.uncompressed_offset = 0
+            self.uncompressed_size = 0
+            self.key0 = 0
+            self.compressed_offset = 0
+            self.compressed_size = 0
+            self.key1 = 0
+
+        def parse(self, f):
+            r = ByteReader
+            self.uncompressed_offset = r.int64(f)
+            self.uncompressed_size = r.int32(f)
+            self.key0 = r.int32(f)
+            self.compressed_offset = r.int64(f)
+            self.compressed_size = r.int32(f)
+            self.key1 = r.int32(f)
+
+        def write(self, f):
+            w = BytePacker
+            bChunkEntry = b''
+            bChunkEntry += w.int64(self.uncompressed_offset)
+            bChunkEntry += w.int32(self.uncompressed_size)
+            bChunkEntry += w.int32(self.key0)
+            bChunkEntry += w.int64(self.compressed_offset)
+            bChunkEntry += w.int32(self.compressed_size)
+            bChunkEntry += w.int32(self.key1)
+            f.write(bChunkEntry)
+
+        def print(self):
+            print("Chunk", "\n",
+                  "U Offset = ", self.uncompressed_offset, "\n",
+                  "U Size = ", self.uncompressed_size, "\n",
+                  "Key0 = ", self.key0, "\n",
+                  "C Offset = ", self.compressed_offset, "\n",
+                  "C Size = ", self.compressed_size, "\n",
+                  "Key1 = ", self.key1, "\n")
+
+    def __init__(self):
+        self.DataStart = 0
+        self.Chunks = []
+        self.DesiredArchive = ""
+
+
+    @staticmethod
+    def get_file_hash(string):
+        tmp = string.encode("utf8") + b'\x00'
+        fileHash = mmh3.hash64(tmp, 42, signed=False)[0]
+        # print(hex(fileHash), fileHash)
+        # bHash = BytePacker.int64(fileHash)
+        # print(bHash)
+        return fileHash
+
+    def FindChunkContainingOffset(self,Uoffset):
+        print(Uoffset)
+        for i, c in enumerate(self.Chunks):
+            if Uoffset in range(c.uncompressed_offset, c.uncompressed_offset + c.uncompressed_size):
+                print(c.uncompressed_offset, c.uncompressed_offset + c.uncompressed_size,i)
+                return i
+
+
+    def ClipChunk(self,file, StartChunkIndex):
+        RealStartOffset = file.offset - self.Chunks[StartChunkIndex].uncompressed_offset
+        RealEndOffset = RealStartOffset + file.size
+        # print(file.offset,Chunks[StartChunkIndex].uncompressed_offset,RealStartOffset,RealEndOffset)
+        return RealStartOffset, RealEndOffset
+
+    def ExtractFile(self,file,filePath, isStream = False):
+        oodle = Oodle()
+        HZDEditor = bpy.context.scene.HZDEditor
+
+        StartChunkIndex = self.FindChunkContainingOffset(file.offset)
+        EndChunkIndex = self.FindChunkContainingOffset(file.offset + file.size)
+
+        DataChunks = b''
+
+        if isStream:
+            ExtractedFilePath = HZDEditor.WorkAbsPath+filePath+".core.stream"
+        else:
+            ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+        if os.path.exists(ExtractedFilePath):
+            return ExtractedFilePath
+        else:
+            directory = pathlib.Path(ExtractedFilePath).parent
+            pathlib.Path(directory).mkdir(parents= True,exist_ok=True)
+            with open(HZDEditor.GamePath + "Packed_DX12\\" + self.DesiredArchive, 'rb') as f, open(ExtractedFilePath, 'wb') as w:
+                for chunk in self.Chunks[StartChunkIndex:EndChunkIndex + 1]:
+                    chunk.print()
+                    f.seek(chunk.compressed_offset)
+                    buffer = f.read(chunk.compressed_size)
+                    data = oodle.decompress(buffer, chunk.uncompressed_size)
+                    DataChunks += data
+                Start, End = self.ClipChunk(file, StartChunkIndex)
+                w.write(DataChunks[Start:End])
+                print("Created File: ", ExtractedFilePath)
+            return ExtractedFilePath
+
+
+    def FindFile(self,filePath):
+
+
+        HZDEditor = bpy.context.scene.HZDEditor
+
+        # DesiredHash = b'\x0A\x4C\xD6\x5C\xF6\x5A\xFF\x2F' #Prefetch
+        DesiredHash = self.get_file_hash(filePath)
+        for binArchive in ['Initial.bin','Remainder.bin','DLC1.bin']:
+            with open(HZDEditor.GamePath + "Packed_DX12\\" + binArchive, 'rb') as f:
+                H = self.BinHeader()
+                self.Chunks.clear()
+                H.parse(f)
+                H.print()
+
+                self.DataStart = (32 * H.filecount) + (32 * H.chunkcount) + 40
+                print(self.DataStart)
+                foundFile = False
+                for files in range(H.filecount):
+                    file = self.FileEntry()
+                    file.parse(f)
+                    # Files.append(file)
+                    if file.hash == DesiredHash:
+                        file.print()
+                        foundFile = True
+                        DesiredFile = file
+                if foundFile:
+                    for chunk in range(H.chunkcount):
+                        chunk = self.ChunkEntry()
+                        chunk.parse(f)
+                        self.Chunks.append(chunk)
+                        self.DesiredArchive = binArchive
+                    break
+                else:
+                    pass
+        if not foundFile:
+            raise Exception("Could not find file in bin archive.",filePath,DesiredHash.hex())
+        else:
+            return DesiredFile
 
 def ClearProperties(self,context):
     HZDEditor = bpy.context.scene.HZDEditor
     HZDEditor.HZDAbsPath = bpy.path.abspath(HZDEditor.HZDPath)
+    HZDEditor.GameAbsPath = bpy.path.abspath(HZDEditor.GamePath)
+    HZDEditor.WorkAbsPath = bpy.path.abspath(HZDEditor.WorkPath)
     HZDEditor.SkeletonAbsPath = bpy.path.abspath(HZDEditor.SkeletonPath)
     HZDEditor.SkeletonName = "Unknown Skeleton: Import Skeleton to set."
     BoneMatrices.clear()
@@ -71,11 +402,22 @@ class ByteReader:
         b = f.read(2)
         # print(b.hex())
         return float(np.frombuffer(b,dtype=np.float16)[0])
-
+    @staticmethod
+    def hash(f):
+        b = f.read(8)
+        return b
+    @staticmethod
+    def uuid(f):
+        return f.read(16)
     @staticmethod
     def int32(f):
         b = f.read(4)
         i = unpack('<i',b)[0]
+        return i
+    @staticmethod
+    def uint32(f):
+        b = f.read(4)
+        i = unpack('<I',b)[0]
         return i
     @staticmethod
     def int64(f):
@@ -114,7 +456,6 @@ class BytePacker:
     @staticmethod
     def int16(v):
         return pack('<h', v)
-
     @staticmethod
     def uint16(v):
         return pack('<H', v)
@@ -129,6 +470,9 @@ class BytePacker:
     @staticmethod
     def int32(v):
         return pack('<i', v)
+    @staticmethod
+    def uint32(v):
+        return pack('<I', v)
 
     @staticmethod
     def int64(v):
@@ -288,6 +632,10 @@ def ParseFaces(f):
 class HZDSettings(bpy.types.PropertyGroup):
     HZDPath: bpy.props.StringProperty(name="Mesh Core",subtype='FILE_PATH', update=ClearProperties)
     HZDAbsPath : bpy.props.StringProperty()
+    GamePath: bpy.props.StringProperty(name="Game Path", subtype='FILE_PATH', update=ClearProperties)
+    GameAbsPath: bpy.props.StringProperty()
+    WorkPath: bpy.props.StringProperty(name="Workspace Path", subtype='FILE_PATH', update=ClearProperties)
+    WorkAbsPath: bpy.props.StringProperty()
     HZDSize: bpy.props.IntProperty()
     SkeletonPath: bpy.props.StringProperty(name="Skeleton Core",subtype='FILE_PATH', update=ClearProperties)
     SkeletonAbsPath : bpy.props.StringProperty()
@@ -483,9 +831,119 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
 
 
     bpy.context.collection.objects.link(obj)
+
+    # Attach to Armature
     obj.modifiers.new(name='Skeleton', type='ARMATURE')
     obj.modifiers['Skeleton'].object = armature
     obj.parent = armature
+
+
+    matblock = asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex]
+    CreateMaterial(obj,matblock,meshName)
+
+def ExtractTexture(outWorkspace,texPath):
+    def BuildDDSHeader(tex:Texture) -> bytes:
+        r = BytePacker
+        data = bytes()
+        flags = b'\x07\x10\x00\x00'
+        data += flags
+
+        data += r.uint32(tex.height)
+        data += r.uint32(tex.width)
+        data += r.uint32(tex.thumbnailLength + tex.streamSize32)
+        data += r.uint32(0)
+        data += r.uint32(tex.mipCount + 1 if hasattr(tex, "mipCount") else 1)
+        data += (b'\x00' * 4) * 11
+
+        ddsPF = bytes()
+        ddsPF += r.uint32(32)
+        ddsPF += r.uint32(4)
+        ddsPF += b'DX10'
+        ddsPF += r.uint32(0)
+        ddsPF += r.uint32(0)
+        ddsPF += r.uint32(0)
+        ddsPF += r.uint32(0)
+        ddsPF += r.uint32(0)
+        
+        data += ddsPF
+        data += r.uint32(0)
+        data += r.uint32(0)
+        data += r.uint32(0)
+        data += r.uint32(0)
+        data += r.uint32(0)
+
+        data = b'DDS ' + r.uint32(len(data)+4) + data
+        
+        dx10 = b''
+        assert tex.format in format_map, f"Unmapped image format: {tex.format.name}"
+        dx10 += r.uint32(format_map[tex.format].value)
+        dx10 += r.uint32(3)
+        dx10 += r.uint32(0)
+        dx10 += r.uint32(1)
+        dx10 += r.uint32(0)
+
+        data += dx10
+
+        return data
+    def ParseTexture(filePath):
+        #Parse Extracted Texture core
+        with open(filePath,'rb') as f:
+            texAs = TextureAsset(f)
+
+        outPath = pathlib.Path(filePath)
+        #Extract Stream
+        for t in texAs.textures:
+            streamData = bytes()
+            if t.streamSize32 > 0:
+                streamFileEntry = AM.FindFile(texPath+".core.stream")
+                streamFilePath = AM.ExtractFile(streamFileEntry,texPath,True)
+                with open(streamFilePath,'rb') as s:
+                    s.seek(t.streamOffset)
+                    streamData = s.read(t.streamSize64)
+            outImage = outPath.with_name(t.name+".dds")
+            if os.path.exists(outImage):
+                textureFiles.append(outImage)
+            else:
+                with open(outImage,'wb') as w:
+                    w.write(BuildDDSHeader(t))
+                    w.write(streamData)
+                    w.write(t.thumbnail)
+                    textureFiles.append(outImage)
+
+    textureFiles = []
+    AM = ArchiveManager()
+    if os.path.exists(outWorkspace+texPath+".core"):
+        ParseTexture(outWorkspace+texPath+".core")
+        return textureFiles
+    else:
+        #Extract Core
+        texFileEntry = AM.FindFile(texPath+".core")
+        filePath = AM.ExtractFile(texFileEntry,texPath,False)
+
+        ParseTexture(filePath)
+
+    return textureFiles
+def CreateMaterial(obj,matblock,meshName):
+    HZDEditor = bpy.context.scene.HZDEditor
+    if bpy.data.materials.find(str(matblock.shaderName+"___"+meshName)) == -1:
+        mat = bpy.data.materials.new(name=str(matblock.shaderName+"___"+meshName))
+        obj.data.materials.append(mat)
+        mat.use_nodes = True
+        for i,t in enumerate(matblock.uniqueTextures):
+            images = ExtractTexture(HZDEditor.WorkAbsPath, t)
+
+            for ii, image in enumerate(images):
+                texNode = mat.node_tree.nodes.new('ShaderNodeTexImage')
+                texNode.name = t
+                imageName = t.split('/')
+                texNode.label = imageName[len(imageName)-1]
+                texNode.location = -400*((i+ii)%5)-400,-300*int((i+ii)/5)+600
+                bpy.data.images.load(str(image))
+                texNode.image = bpy.data.images[image.name]
+
+    else:
+        mat = bpy.data.materials[matblock.shaderName+"___"+meshName]
+        obj.data.materials.append(mat)
 
 def CreateSkeleton():
     r = ByteReader()
@@ -948,6 +1406,257 @@ class DataBlock:
         # print("ID = ",self.ID,"\n","Size = ",self.size,"\nStart = ",self.blockStartOffset)
     def EndBlock(self,f):
         f.seek(self.blockStartOffset + self.size)
+
+class TextureAsset:
+    def __init__(self,f):
+        self.textures = []
+        r = ByteReader
+        ID = r.int64(f)
+        f.seek(-8,1)
+        if ID == 1009496109439982815: #Texture Set
+            self.texSet = TextureSet(f)
+            for tex in self.texSet.textures:
+                if type(tex.textureRef) is str:
+                    pass
+                else:
+                    self.textures.append(Texture(f))
+        elif ID == 17501462827539052646: #Single Texture
+            self.textures.append(Texture(f))
+        else:
+            raise Exception("That wasn't a texture asset.")
+class TextureSet(DataBlock):
+    class TextureUsage:
+        UsageType = ["Invalid",
+                     "Color",
+                     "Alpha",
+                     "Normal",
+                     "Reflectance",
+                     "AO",
+                     "Roughness",
+                     "Height",
+                     "Mask",
+                     "Mask_Alpha",
+                     "Incandescence",
+                     "Translucency_Diffusion",
+                     "Translucency_Amount",
+                     "Misc_01",
+                     "Count"]
+    class TextureDetails:
+        class ChannelDetails:
+            def __init__(self,f):
+                r = ByteReader
+                self.usageTypeIndex = r.uint8(f)
+                self.usageType = TextureSet.TextureUsage.UsageType[self.usageTypeIndex & 0x0F]
+
+        def __init__(self,f):
+            r = ByteReader
+            f.seek(9)
+            self.channelTypes = [self.ChannelDetails(f) for _ in range(4)]
+            f.seek(4)
+            refType = r.uint8(f)
+            if refType > 0:
+                self.textureRef = r.uuid(f)
+            elif refType in [2,3]:
+                self.textureRef = r.hashtext(f)
+
+    def __init__(self,f):
+        super().__init__(f)
+        r = ByteReader
+
+        f.seek(16, 1)
+        self.name = r.hashtext(f)
+        self.textureCount = r.int32(f)
+        self.textures = [self.TextureDetails(f) for _ in range(self.textureCount)]
+
+        self.EndBlock(f)
+class Texture(DataBlock):
+    class PixelFormat(IntEnum):
+        INVALID = 0x4C,
+        RGBA_5551 = 0x0,
+        RGBA_5551_REV = 0x1,
+        RGBA_4444 = 0x2,
+        RGBA_4444_REV = 0x3,
+        RGB_888_32 = 0x4,
+        RGB_888_32_REV = 0x5,
+        RGB_888 = 0x6,
+        RGB_888_REV = 0x7,
+        RGB_565 = 0x8,
+        RGB_565_REV = 0x9,
+        RGB_555 = 0xA,
+        RGB_555_REV = 0xB,
+        RGBA_8888 = 0xC,
+        RGBA_8888_REV = 0xD,
+        RGBE_REV = 0xE,
+        RGBA_FLOAT_32 = 0xF,
+        RGB_FLOAT_32 = 0x10,
+        RG_FLOAT_32 = 0x11,
+        R_FLOAT_32 = 0x12,
+        RGBA_FLOAT_16 = 0x13,
+        RGB_FLOAT_16 = 0x14,
+        RG_FLOAT_16 = 0x15,
+        R_FLOAT_16 = 0x16,
+        RGBA_UNORM_32 = 0x17,
+        RG_UNORM_32 = 0x18,
+        R_UNORM_32 = 0x19,
+        RGBA_UNORM_16 = 0x1A,
+        RG_UNORM_16 = 0x1B,
+        R_UNORM_16 = 0x1C,  # Old: INTENSITY_16
+        RGBA_UNORM_8 = 0x1D,
+        RG_UNORM_8 = 0x1E,
+        R_UNORM_8 = 0x1F,  # Old: INTENSITY_8
+        RGBA_NORM_32 = 0x20,
+        RG_NORM_32 = 0x21,
+        R_NORM_32 = 0x22,
+        RGBA_NORM_16 = 0x23,
+        RG_NORM_16 = 0x24,
+        R_NORM_16 = 0x25,
+        RGBA_NORM_8 = 0x26,
+        RG_NORM_8 = 0x27,
+        R_NORM_8 = 0x28,
+        RGBA_UINT_32 = 0x29,
+        RG_UINT_32 = 0x2A,
+        R_UINT_32 = 0x2B,
+        RGBA_UINT_16 = 0x2C,
+        RG_UINT_16 = 0x2D,
+        R_UINT_16 = 0x2E,
+        RGBA_UINT_8 = 0x2F,
+        RG_UINT_8 = 0x30,
+        R_UINT_8 = 0x31,
+        RGBA_INT_32 = 0x32,
+        RG_INT_32 = 0x33,
+        R_INT_32 = 0x34,
+        RGBA_INT_16 = 0x35,
+        RG_INT_16 = 0x36,
+        R_INT_16 = 0x37,
+        RGBA_INT_8 = 0x38,
+        RG_INT_8 = 0x39,
+        R_INT_8 = 0x3A,
+        RGB_FLOAT_11_11_10 = 0x3B,
+        RGBA_UNORM_10_10_10_2 = 0x3C,
+        RGB_UNORM_11_11_10 = 0x3D,
+        DEPTH_FLOAT_32_STENCIL_8 = 0x3E,
+        DEPTH_FLOAT_32_STENCIL_0 = 0x3F,
+        DEPTH_24_STENCIL_8 = 0x40,
+        DEPTH_16_STENCIL_0 = 0x41,
+        BC1 = 0x42,  # Old: S3TC1
+        BC2 = 0x43,  # Old: S3TC3
+        BC3 = 0x44,  # Old: S3TC5
+        BC4U = 0x45,
+        BC4S = 0x46,
+        BC5U = 0x47,
+        BC5S = 0x48,
+        BC6U = 0x49,
+        BC6S = 0x4A,
+        BC7 = 0x4B
+    def __init__(self,f):
+        super().__init__(f)
+        r = ByteReader
+        f.seek(16,1)
+        self.name = r.hashtext(f)
+        f.seek(2,1)
+        width = r.uint16(f)
+        self.width = width & 0x3FFF
+        height = r.uint16(f)
+        self.height = height & 0x3FFF
+        f.seek(2,1)
+        f.seek(1,1)
+        self.format : Texture.PixelFormat = self.PixelFormat(r.uint8(f))
+        f.seek(2,1)
+        f.seek(20,1)
+        self.imageChunkSize= r.int32(f)
+        self.thumbnailLength = r.int32(f)
+        self.streamSize32 = r.int32(f)
+        if self.streamSize32 > 0:
+            self.mipCount = r.int32(f)
+            pathLength = r.int32(f)
+            self.streamPath = r.path(f,pathLength) [6:] #remove "cache:"
+            self.streamOffset = r.int64(f)
+            self.streamSize64 = r.int64(f)
+        else:
+            padding = self.imageChunkSize - (self.thumbnailLength + 8)
+            f.seek(padding,1)
+        self.thumbnail = f.read(self.thumbnailLength)
+
+        self.EndBlock(f)
+format_map: Dict[Texture.PixelFormat, DXGI] = {
+    Texture.PixelFormat.INVALID: DXGI.DXGI_FORMAT_UNKNOWN,
+    # Texture.PixelFormat.RGBA_5551: ,
+    # Texture.PixelFormat.RGBA_5551_REV: ,
+    # Texture.PixelFormat.RGBA_4444: ,
+    # Texture.PixelFormat.RGBA_4444_REV: ,
+    # Texture.PixelFormat.RGB_888_32: ,
+    # Texture.PixelFormat.RGB_888_32_REV: ,
+    # Texture.PixelFormat.RGB_888: ,
+    # Texture.PixelFormat.RGB_888_REV: ,
+    # Texture.PixelFormat.RGB_565: ,
+    # Texture.PixelFormat.RGB_565_REV: ,
+    # Texture.PixelFormat.RGB_555: ,
+    # Texture.PixelFormat.RGB_555_REV: ,
+    Texture.PixelFormat.RGBA_8888: DXGI.DXGI_FORMAT_R8G8B8A8_TYPELESS,
+    # Texture.PixelFormat.RGBA_8888_REV: ,
+    # Texture.PixelFormat.RGBE_REV: ,
+    Texture.PixelFormat.RGBA_FLOAT_32: DXGI.DXGI_FORMAT_R32G32B32A32_FLOAT,
+    Texture.PixelFormat.RGB_FLOAT_32: DXGI.DXGI_FORMAT_R32G32B32_FLOAT,
+    Texture.PixelFormat.RG_FLOAT_32: DXGI.DXGI_FORMAT_R32G32_FLOAT,
+    Texture.PixelFormat.R_FLOAT_32: DXGI.DXGI_FORMAT_R32_FLOAT,
+    Texture.PixelFormat.RGBA_FLOAT_16: DXGI.DXGI_FORMAT_R16G16B16A16_FLOAT,
+    # Texture.PixelFormat.RGB_FLOAT_16: ,
+    Texture.PixelFormat.RG_FLOAT_16: DXGI.DXGI_FORMAT_R16G16_FLOAT,
+    Texture.PixelFormat.R_FLOAT_16: DXGI.DXGI_FORMAT_R16_FLOAT,
+    # Texture.PixelFormat.RGBA_UNORM_32: ,
+    # Texture.PixelFormat.RG_UNORM_32: ,
+    # Texture.PixelFormat.R_UNORM_32: ,
+    Texture.PixelFormat.RGBA_UNORM_16: DXGI.DXGI_FORMAT_R16G16B16A16_UNORM,
+    Texture.PixelFormat.RG_UNORM_16: DXGI.DXGI_FORMAT_R16G16_UNORM,
+    Texture.PixelFormat.R_UNORM_16: DXGI.DXGI_FORMAT_R16_UNORM,  # Old: INTENSITY_16
+    Texture.PixelFormat.RGBA_UNORM_8: DXGI.DXGI_FORMAT_R8G8B8A8_UNORM,
+    Texture.PixelFormat.RG_UNORM_8: DXGI.DXGI_FORMAT_R8G8_UNORM,
+    Texture.PixelFormat.R_UNORM_8: DXGI.DXGI_FORMAT_R8_UNORM,  # Old: INTENSITY_8
+    # Texture.PixelFormat.RGBA_NORM_32: ,
+    # Texture.PixelFormat.RG_NORM_32: ,
+    # Texture.PixelFormat.R_NORM_32: ,
+    Texture.PixelFormat.RGBA_NORM_16: DXGI.DXGI_FORMAT_R16G16B16A16_SNORM,
+    Texture.PixelFormat.RG_NORM_16: DXGI.DXGI_FORMAT_R16G16_SNORM,
+    Texture.PixelFormat.R_NORM_16: DXGI.DXGI_FORMAT_R16_SNORM,
+    Texture.PixelFormat.RGBA_NORM_8: DXGI.DXGI_FORMAT_R8G8B8A8_SNORM,
+    Texture.PixelFormat.RG_NORM_8: DXGI.DXGI_FORMAT_R8G8_SNORM,
+    Texture.PixelFormat.R_NORM_8: DXGI.DXGI_FORMAT_R8_SNORM,
+    Texture.PixelFormat.RGBA_UINT_32: DXGI.DXGI_FORMAT_R32G32B32A32_UINT,
+    Texture.PixelFormat.RG_UINT_32: DXGI.DXGI_FORMAT_R32G32_UINT,
+    Texture.PixelFormat.R_UINT_32: DXGI.DXGI_FORMAT_R32_UINT,
+    Texture.PixelFormat.RGBA_UINT_16: DXGI.DXGI_FORMAT_R16G16B16A16_UINT,
+    Texture.PixelFormat.RG_UINT_16: DXGI.DXGI_FORMAT_R16G16_UINT,
+    Texture.PixelFormat.R_UINT_16: DXGI.DXGI_FORMAT_R16_UINT,
+    Texture.PixelFormat.RGBA_UINT_8: DXGI.DXGI_FORMAT_R8G8B8A8_UINT,
+    Texture.PixelFormat.RG_UINT_8: DXGI.DXGI_FORMAT_R8G8_UINT,
+    Texture.PixelFormat.R_UINT_8: DXGI.DXGI_FORMAT_R8_UINT,
+    Texture.PixelFormat.RGBA_INT_32: DXGI.DXGI_FORMAT_R32G32B32A32_SINT,
+    Texture.PixelFormat.RG_INT_32: DXGI.DXGI_FORMAT_R32G32_SINT,
+    Texture.PixelFormat.R_INT_32: DXGI.DXGI_FORMAT_R32_SINT,
+    Texture.PixelFormat.RGBA_INT_16: DXGI.DXGI_FORMAT_R16G16B16A16_SINT,
+    Texture.PixelFormat.RG_INT_16: DXGI.DXGI_FORMAT_R16G16_SINT,
+    Texture.PixelFormat.R_INT_16: DXGI.DXGI_FORMAT_R16_SINT,
+    Texture.PixelFormat.RGBA_INT_8: DXGI.DXGI_FORMAT_R8G8B8A8_SINT,
+    Texture.PixelFormat.RG_INT_8: DXGI.DXGI_FORMAT_R8G8_SINT,
+    Texture.PixelFormat.R_INT_8: DXGI.DXGI_FORMAT_R8_SINT,
+    Texture.PixelFormat.RGB_FLOAT_11_11_10: DXGI.DXGI_FORMAT_R11G11B10_FLOAT,
+    Texture.PixelFormat.RGBA_UNORM_10_10_10_2: DXGI.DXGI_FORMAT_R10G10B10A2_UNORM,
+    # Texture.PixelFormat.RGB_UNORM_11_11_10: ,
+    Texture.PixelFormat.DEPTH_FLOAT_32_STENCIL_8: DXGI.DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
+    Texture.PixelFormat.DEPTH_FLOAT_32_STENCIL_0: DXGI.DXGI_FORMAT_D32_FLOAT,
+    Texture.PixelFormat.DEPTH_24_STENCIL_8: DXGI.DXGI_FORMAT_D24_UNORM_S8_UINT,
+    Texture.PixelFormat.DEPTH_16_STENCIL_0: DXGI.DXGI_FORMAT_D16_UNORM,
+    Texture.PixelFormat.BC1: DXGI.DXGI_FORMAT_BC1_UNORM,  # Old: S3TC1
+    Texture.PixelFormat.BC2: DXGI.DXGI_FORMAT_BC2_UNORM,  # Old: S3TC3
+    Texture.PixelFormat.BC3: DXGI.DXGI_FORMAT_BC3_UNORM,  # Old: S3TC5
+    Texture.PixelFormat.BC4U: DXGI.DXGI_FORMAT_BC4_UNORM,
+    Texture.PixelFormat.BC4S: DXGI.DXGI_FORMAT_BC4_SNORM,
+    Texture.PixelFormat.BC5U: DXGI.DXGI_FORMAT_BC5_UNORM,
+    Texture.PixelFormat.BC5S: DXGI.DXGI_FORMAT_BC5_SNORM,
+    Texture.PixelFormat.BC6U: DXGI.DXGI_FORMAT_BC6H_UF16,
+    Texture.PixelFormat.BC6S: DXGI.DXGI_FORMAT_BC6H_SF16,
+    Texture.PixelFormat.BC7: DXGI.DXGI_FORMAT_BC7_UNORM
+}
 
 class Bone:
     def __init__(self,matrix, index = 0):
@@ -1519,6 +2228,11 @@ class HZDPanel(bpy.types.Panel):
         HZDEditor = context.scene.HZDEditor
 
         row = layout.row()
+        row.prop(HZDEditor, "WorkPath")
+        row = layout.row()
+        row.prop(HZDEditor, "GamePath")
+
+        row = layout.row()
         row.prop(HZDEditor,"HZDPath")
         row = layout.row()
         row.prop(HZDEditor, "SkeletonPath")
@@ -1721,3 +2435,45 @@ def unregister():
     bpy.utils.unregister_class(ShowUsedTextures)
 if __name__ == "__main__":
     register()
+
+    if os.path.exists(bpy.context.scene.HZDEditor.GameAbsPath):
+        ## I do not know who the original author of this Oodle class is
+        ## I got it from here https://github.com/REDxEYE/ProjectDecima_python/tree/master/ProjectDecima/utils
+        class Oodle:
+            HZDEditor = bpy.context.scene.HZDEditor
+
+            _local_path = Path(__file__).absolute().parent
+            _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
+            # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
+            _compress = _lib.OodleLZ_Compress
+            _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
+                                  c_size_t,
+                                  c_size_t]
+            _compress.restype = c_int32
+            _decompress = _lib.OodleLZ_Decompress
+            _decompress.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_int32, c_int32, c_int32, c_size_t,
+                                    c_size_t,
+                                    c_size_t, c_size_t, c_size_t, c_size_t, c_int32]
+            _decompress.restype = c_int32
+
+            @staticmethod
+            def decompress(input_buffer: Union[bytes, bytearray], output_size):
+                out_data_p = ctypes.create_string_buffer(output_size)
+                in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
+                result = Oodle._decompress(in_data_p, len(input_buffer), out_data_p, output_size, 0, 0,
+                                           0, 0, 0, 0, 0, 0, 0, 0)
+                assert result >= 0, 'Error decompressing chunk'
+                return bytes(out_data_p)
+
+            @staticmethod
+            def compress(input_buffer: Union[bytes, bytearray], fmt: int = 8, level: int = 4):
+                def calculate_compression_bound(size):
+                    return size + 274 * ((size + 0x3FFFF) // 0x40000)
+
+                out_size = calculate_compression_bound(len(input_buffer))
+                out_data_p = ctypes.create_string_buffer(out_size)
+                in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
+
+                result = Oodle._compress(fmt, in_data_p, len(input_buffer), out_data_p, level, 0, 0, 0, 0, 0)
+                assert result >= 0, 'Error compressing chunk'
+                return bytes(out_data_p[:result])
