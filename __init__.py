@@ -2,24 +2,24 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 2, 2),
-    "blender": (2, 93, 0),
+    "version": (1, 3, 1),
+    "blender": (3, 1, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
     }
 
 
-def install_Package():
-    import subprocess
-    import sys
-    import os
-
-    python_exe = os.path.join(sys.prefix, 'bin', 'python.exe')
-
-    subprocess.call([python_exe, "-m", "ensurepip"])
-    subprocess.call([python_exe, "-m", "pip", "install", "--upgrade", "pip"])
-
-    subprocess.call([python_exe, "-m", "pip", "install", "mmh3"])
+# def install_Package():
+#     import subprocess
+#     import sys
+#     import os
+#
+#     python_exe = os.path.join(sys.prefix, 'bin', 'python.exe')
+#
+#     subprocess.call([python_exe, "-m", "ensurepip"])
+#     subprocess.call([python_exe, "-m", "pip", "install", "--upgrade", "pip"])
+#
+#     subprocess.call([python_exe, "-m", "pip", "install", "mmh3"])
 # install_Package()
 
 import bpy
@@ -27,17 +27,24 @@ import bmesh
 import os
 import pathlib
 from struct import unpack, pack
-import math
 import numpy as np
 import mathutils
 import operator
-import mmh3
+# import mmh3
+import pymmh3
 
 import ctypes
-from ctypes import c_size_t, c_char_p, c_int32, c_uint64, c_void_p
+from ctypes import c_size_t, c_char_p, c_int32
 from pathlib import Path
-from typing import Union, Dict, List, Set
+from typing import Union, Dict
 from enum import IntEnum
+
+if "bpy" in locals():
+    import imp
+    imp.reload(pymmh3)
+else:
+    from . import pymmh3
+
 
 class DXGI(IntEnum):
     DXGI_FORMAT_UNKNOWN = 0,
@@ -267,7 +274,7 @@ class ArchiveManager:
     @staticmethod
     def get_file_hash(string):
         tmp = string.encode("utf8") + b'\x00'
-        fileHash = mmh3.hash64(tmp, 42, signed=False)[0]
+        fileHash = pymmh3.hash64(tmp, 42, True)[0]
         # print(hex(fileHash), fileHash)
         # bHash = BytePacker.int64(fileHash)
         # print(bHash)
@@ -600,7 +607,7 @@ def ParseNormals(f):
     tz = r.float(f)
     # Flip
     flip = r.float(f)
-    return [nx,ny,nz], [tx,ty,tz], flip
+    return (nx,ny,nz), [tx,ty,tz], flip
 def ParseColor(f):
     r = ByteReader()
     rc = r.uint8(f)/255
@@ -656,6 +663,7 @@ class HZDSettings(bpy.types.PropertyGroup):
     LodDistance13: bpy.props.FloatProperty(name="Lod Distance 13")
     LodDistance14: bpy.props.FloatProperty(name="Lod Distance 14")
     LodDistance15: bpy.props.FloatProperty(name="Lod Distance 15")
+    ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False)
 
 
 def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
@@ -703,11 +711,11 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
         fList = []
         fb = md.faceBlock
         f.seek(fb.faceDataOffset)
-        for n in range(fb.faceDataOffset,fb.faceDataOffset+fb.faceDataSize,6):
+        for n in range(int(fb.indexCount/3)):
             face = ParseFaces(f)
             if face[0] < vertCount and face[1] < vertCount and face[2] < vertCount:
                 fList.append(face)
-
+        # print(len(fList))
         #NORMALS
         if vb.normalsStream:
             nList = []
@@ -756,7 +764,7 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     bm.verts.ensure_lookup_table()
     # TRIANGLES ####################################
     for f in fList:
-        if f[0] != f[1] != f[2]:
+        if f[0] != f[1] != f[2] != f[0]:
             fvs = []
             for i in f:
                 fv = bm.verts[i]
@@ -783,15 +791,16 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
             if vb.hasTwoUV:
                 loop[uv_layer2].uv = uList2[loop.vert.index]
 
-    # NORMALS #######################################
-
-    if vb.normalsStream:
-        for i,v in enumerate(mesh.vertices):
-            v.normal = nList[i]
-
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
+
+    # NORMALS #######################################
+
+    if vb.normalsStream:
+        mesh.use_auto_smooth = True
+        mesh.normals_split_custom_set_from_vertices(nList)
+
 
     # VERTEX GROUPS ####################################
     SkeletonPath = HZDEditor.SkeletonAbsPath
@@ -837,9 +846,9 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     obj.modifiers['Skeleton'].object = armature
     obj.parent = armature
 
-
-    matblock = asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex]
-    CreateMaterial(obj,matblock,meshName)
+    if HZDEditor.ExtractTextures:
+        matblock = asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex]
+        CreateMaterial(obj,matblock,meshName)
 
 def ExtractTexture(outWorkspace,texPath):
     def BuildDDSHeader(tex:Texture) -> bytes:
@@ -965,6 +974,7 @@ def CreateSkeleton():
             boneName = r.string(f,boneNameSize)
             f.seek(4,1)
             parentIndex = r.int16(f)
+            # print(parentIndex)
             Bones.append(boneName)
             ParentIndices.append(parentIndex)
 
@@ -979,6 +989,7 @@ def CreateSkeleton():
     for i,b in enumerate(Bones):
         bone = armature.edit_bones.new(b)
         bone.parent = armature.edit_bones[ParentIndices[i]]
+        # print(bone.parent)
         bone.tail = mathutils.Vector([0,0,1])
 
     for b in BoneMatrices:
@@ -1014,6 +1025,7 @@ def PackVertex(f,vertex,stride,half=False,boneCount=0):
             else:
                 bic = (stride - coLength) / 2
         bint16 = True
+        bic = int(bic)
     else:
         bic = int((stride - coLength) / 2)  # bone indices count
         bint16 = False
@@ -1346,6 +1358,7 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
     os.remove(stream)
     os.rename(core + "TMP", core)
     os.rename(stream + "TMP", stream)
+    ReadCoreFile()
 
 def SaveDistances(Index):
     p = BytePacker()
@@ -1426,16 +1439,16 @@ class TextureAsset:
             raise Exception("That wasn't a texture asset.")
 class TextureSet(DataBlock):
     class TextureUsage:
-        UsageType = ["Invalid",
-                     "Color",
-                     "Alpha",
-                     "Normal",
-                     "Reflectance",
-                     "AO",
-                     "Roughness",
-                     "Height",
-                     "Mask",
-                     "Mask_Alpha",
+        UsageType = ["Invalid", # 0
+                     "Color",   # 1
+                     "Alpha",   # 2
+                     "Normal",  # 3
+                     "Reflectance",  # 4
+                     "AO",      # 5
+                     "Roughness",  # 6
+                     "Height",  # 7
+                     "Mask",    # 8
+                     "Mask_Alpha",  # 9
                      "Incandescence",
                      "Translucency_Diffusion",
                      "Translucency_Amount",
@@ -2244,6 +2257,8 @@ class HZDPanel(bpy.types.Panel):
         if BoneMatrices:
             row = layout.row()
             row.operator("object.import_skt",icon="ARMATURE_DATA")
+            row = layout.row()
+            row.prop(HZDEditor,"ExtractTextures")
         mainRow = layout.row()
 
 class LODDistancePanel(bpy.types.Panel):
@@ -2439,6 +2454,7 @@ if __name__ == "__main__":
     if os.path.exists(bpy.context.scene.HZDEditor.GameAbsPath):
         ## I do not know who the original author of this Oodle class is
         ## I got it from here https://github.com/REDxEYE/ProjectDecima_python/tree/master/ProjectDecima/utils
+        print("Game Path is Valid")
         class Oodle:
             HZDEditor = bpy.context.scene.HZDEditor
 
