@@ -425,7 +425,7 @@ def hash64(key, seed=0x0, x64arch=True):
     else:
         signed_val2 = -((unsigned_val2 ^ 0xFFFFFFFFFFFFFFFF) + 1)
 
-    return (int(signed_val1), int(signed_val2))
+    return (int(unsigned_val1), int(unsigned_val2))
 
 
 def hash_bytes(key, seed=0x0, x64arch=True):

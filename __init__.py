@@ -1,8 +1,8 @@
-bl_info = {
+l_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 3, 1),
+    "version": (1, 3, 2),
     "blender": (3, 1, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -170,6 +170,11 @@ class DXGI(IntEnum):
 
 BoneMatrices = {}
 
+verbose = True
+
+def say(string):
+    if verbose:
+        print(str(string))
 
 class ArchiveManager:
     class BinHeader:
@@ -278,13 +283,14 @@ class ArchiveManager:
         # print(hex(fileHash), fileHash)
         # bHash = BytePacker.int64(fileHash)
         # print(bHash)
+        # say("mmh3 = "+hex(fileHash)+" ("+string+")")
         return fileHash
 
     def FindChunkContainingOffset(self,Uoffset):
-        print(Uoffset)
+        # say("looking for chunk containing offset:"+str(Uoffset))
         for i, c in enumerate(self.Chunks):
             if Uoffset in range(c.uncompressed_offset, c.uncompressed_offset + c.uncompressed_size):
-                print(c.uncompressed_offset, c.uncompressed_offset + c.uncompressed_size,i)
+                # print(c.uncompressed_offset, c.uncompressed_offset + c.uncompressed_size,i)
                 return i
 
 
@@ -298,30 +304,37 @@ class ArchiveManager:
         oodle = Oodle()
         HZDEditor = bpy.context.scene.HZDEditor
 
-        StartChunkIndex = self.FindChunkContainingOffset(file.offset)
-        EndChunkIndex = self.FindChunkContainingOffset(file.offset + file.size)
+
 
         DataChunks = b''
-
-        if isStream:
-            ExtractedFilePath = HZDEditor.WorkAbsPath+filePath+".core.stream"
+        if filePath[-5:]==".core" or filePath[-12:] == ".core.stream":
+            ExtractedFilePath = HZDEditor.WorkAbsPath+filePath
         else:
-            ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+            if isStream:
+                ExtractedFilePath = HZDEditor.WorkAbsPath+filePath+".core.stream"
+            else:
+                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+
         if os.path.exists(ExtractedFilePath):
+            say(filePath + "------Asset already extracted")
             return ExtractedFilePath
         else:
+            say(filePath + "------Extracting Asset")
+            StartChunkIndex = self.FindChunkContainingOffset(file.offset)
+            EndChunkIndex = self.FindChunkContainingOffset(file.offset + file.size)
+
             directory = pathlib.Path(ExtractedFilePath).parent
             pathlib.Path(directory).mkdir(parents= True,exist_ok=True)
             with open(HZDEditor.GamePath + "Packed_DX12\\" + self.DesiredArchive, 'rb') as f, open(ExtractedFilePath, 'wb') as w:
                 for chunk in self.Chunks[StartChunkIndex:EndChunkIndex + 1]:
-                    chunk.print()
+                    # chunk.print()
                     f.seek(chunk.compressed_offset)
                     buffer = f.read(chunk.compressed_size)
                     data = oodle.decompress(buffer, chunk.uncompressed_size)
                     DataChunks += data
                 Start, End = self.ClipChunk(file, StartChunkIndex)
                 w.write(DataChunks[Start:End])
-                print("Created File: ", ExtractedFilePath)
+                say("Created File: "+ ExtractedFilePath)
             return ExtractedFilePath
 
 
@@ -333,21 +346,22 @@ class ArchiveManager:
         # DesiredHash = b'\x0A\x4C\xD6\x5C\xF6\x5A\xFF\x2F' #Prefetch
         DesiredHash = self.get_file_hash(filePath)
         for binArchive in ['Initial.bin','Remainder.bin','DLC1.bin']:
+            # say("Searching for "+filePath+" in "+binArchive)
             with open(HZDEditor.GamePath + "Packed_DX12\\" + binArchive, 'rb') as f:
                 H = self.BinHeader()
                 self.Chunks.clear()
                 H.parse(f)
-                H.print()
+                # H.print()
 
                 self.DataStart = (32 * H.filecount) + (32 * H.chunkcount) + 40
-                print(self.DataStart)
+                # say("Data Start Offset: "+str(self.DataStart))
                 foundFile = False
                 for files in range(H.filecount):
                     file = self.FileEntry()
                     file.parse(f)
                     # Files.append(file)
                     if file.hash == DesiredHash:
-                        file.print()
+                        # file.print()
                         foundFile = True
                         DesiredFile = file
                 if foundFile:
@@ -360,7 +374,7 @@ class ArchiveManager:
                 else:
                     pass
         if not foundFile:
-            raise Exception("Could not find file in bin archive.",filePath,DesiredHash.hex())
+            raise Exception("Could not find file in bin archive.",filePath,DesiredHash)
         else:
             return DesiredFile
 
@@ -637,16 +651,23 @@ def ParseFaces(f):
     return face
 
 class HZDSettings(bpy.types.PropertyGroup):
-    HZDPath: bpy.props.StringProperty(name="Mesh Core",subtype='FILE_PATH', update=ClearProperties)
+    AssetPath: bpy.props.StringProperty(name="Asset Path", subtype='FILE_PATH', update=ClearProperties,
+                                      description="Path to a game skeletal mesh file \n e.g.: models/characters/humans/aloy/animation/parts/aloy_ct_a_lx.core")
+    HZDPath: bpy.props.StringProperty(name="Mesh Core",subtype='FILE_PATH', update=ClearProperties,
+                                      description="Path to the mesh .core file")
     HZDAbsPath : bpy.props.StringProperty()
-    GamePath: bpy.props.StringProperty(name="Game Path", subtype='FILE_PATH', update=ClearProperties)
+    GamePath: bpy.props.StringProperty(name="Game Path", subtype='FILE_PATH', update=ClearProperties,
+                                       description="Path to the folder containing HorizonZeroDawn.exe \n e.g.: C:\SteamLibrary\steamapps\common\Horizon Zero Dawn\ ")
     GameAbsPath: bpy.props.StringProperty()
-    WorkPath: bpy.props.StringProperty(name="Workspace Path", subtype='FILE_PATH', update=ClearProperties)
+    WorkPath: bpy.props.StringProperty(name="Workspace Path", subtype='FILE_PATH', update=ClearProperties,
+                                       description="Path to the folder where you want files to be extracted.")
     WorkAbsPath: bpy.props.StringProperty()
     HZDSize: bpy.props.IntProperty()
-    SkeletonPath: bpy.props.StringProperty(name="Skeleton Core",subtype='FILE_PATH', update=ClearProperties)
+    SkeletonPath: bpy.props.StringProperty(name="Skeleton Core",subtype='FILE_PATH', update=ClearProperties,
+                                           description="Path to the skeleton .core file")
     SkeletonAbsPath : bpy.props.StringProperty()
     SkeletonName: bpy.props.StringProperty(name="Skeleton Name")
+
     LodDistance0: bpy.props.FloatProperty(name="Lod Distance 0")
     LodDistance1: bpy.props.FloatProperty(name="Lod Distance 1")
     LodDistance2: bpy.props.FloatProperty(name="Lod Distance 2")
@@ -663,12 +684,12 @@ class HZDSettings(bpy.types.PropertyGroup):
     LodDistance13: bpy.props.FloatProperty(name="Lod Distance 13")
     LodDistance14: bpy.props.FloatProperty(name="Lod Distance 14")
     LodDistance15: bpy.props.FloatProperty(name="Lod Distance 15")
-    ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False)
+    ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False,description="Toggle the extraction of textures. When importing a mesh, texture will be detected and extracted to the Workspace directory.")
 
 
 def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     r = ByteReader()
-    print(isGroup,Index,LODIndex,BlockIndex)
+    # print(isGroup,Index,LODIndex,BlockIndex)
     if isGroup:
         md = asset.LODGroups[Index].LODList[LODIndex].meshBlockList[BlockIndex]
         meshName = asset.LODGroups[Index].LODList[LODIndex].meshNameBlock.name
@@ -679,17 +700,33 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     core = HZDEditor.HZDAbsPath
     stream = core+".stream"
     coresize = os.path.getsize(core)
-    boneCount = len(bpy.data.objects[HZDEditor.SkeletonName].data.bones)
 
-    # print(meshName,"Real Offsets = ",md.vertexBlock.realOffsets, "vOffset = ",md.vertexBlock.vertexStream.dataOffset, "vStride = ", md.vertexBlock.vertexStream.stride)
-    # for a in asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex].shaderBlockInfos:
-    #     for b in a.textureRefs:
-    #         print(b.texPath)
-    # textures = asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex].GetUniqueTexturesOfMatIndex()
-    # for t in textures:
-    #     print(t)
-    print(meshName)
-    # print(md.vertexBlock.vertexCount)
+    say("\nImporting : "+str(BlockIndex)+"_"+meshName)
+
+    # CREATE COLLECTION TREE #####################
+    if bpy.context.scene.collection.children.find(meshName[:-1]) >= 0:
+        assetCollection = bpy.context.scene.collection.children[meshName[:-1]]
+    else:
+        assetCollection = bpy.context.blend_data.collections.new(name=meshName[:-1])
+        bpy.context.scene.collection.children.link(assetCollection)
+
+    if assetCollection.children.find("LOD " + meshName[-1:].capitalize()) >= 0:
+        lodCollection = assetCollection.children["LOD " + meshName[-1:].capitalize()]
+    else:
+        lodCollection = bpy.context.blend_data.collections.new(name="LOD " + meshName[-1:].capitalize())
+        assetCollection.children.link(lodCollection)
+
+    # Attach to Armature #####################
+    armature = None
+    for o in assetCollection.objects:
+        if type(o.data) == bpy.types.Armature:
+            if o.data.name[0:20] == str(ArchiveManager.get_file_hash(asset.LODGroups[0].LODList[0].meshNameBlock.skeletonPath)):
+                armature = o
+    if armature is None:
+        armature = CreateSkeleton()
+
+
+    boneCount = len(armature.data.bones)
 
     with open(stream,'rb') as f:
         #VERTICES
@@ -754,6 +791,7 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     # BUILD MESH ////////////////////////////////////////////////////
     mesh = bpy.data.meshes.new(meshName+"_MESH")
     obj = bpy.data.objects.new(str(BlockIndex)+"_"+meshName,mesh)
+    lodCollection.objects.link(obj)
     bm = bmesh.new()
     bm.from_mesh(mesh)
 
@@ -822,7 +860,9 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
     for bone in CoreBones: #Create vertex Groups
         obj.vertex_groups.new(name=bone)
     # deform_layer = bm.verts.layers.deform.new()
-    armature = bpy.data.objects[HZDEditor.SkeletonName]
+
+
+
     for v in mesh.vertices:
         vindex = v.index
 
@@ -839,18 +879,44 @@ def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
                 raise Exception("Vertex wasn't parsed correctly.{v} is not a bone".format(v=boneindex))
 
 
-    bpy.context.collection.objects.link(obj)
-
-    # Attach to Armature
+    # Attach to Armature ##################
     obj.modifiers.new(name='Skeleton', type='ARMATURE')
     obj.modifiers['Skeleton'].object = armature
     obj.parent = armature
+    # Check if armature is in the asset collection
+    if assetCollection.objects.find(armature.name) == -1:
+        armature.users_collection[0].objects.unlink(armature)
+        assetCollection.objects.link(armature)
 
     if HZDEditor.ExtractTextures:
         matblock = asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex]
         CreateMaterial(obj,matblock,meshName)
 
+def ExtractAsset(assetPath):
+
+    AM = ArchiveManager()
+    #Extract Asset
+
+    assetFile = AM.FindFile(assetPath)
+    filePath = AM.ExtractFile(assetFile,assetPath,False)
+
+    assetStreamFile = AM.FindFile(assetPath+".stream")
+    fileStreamPath = AM.ExtractFile(assetStreamFile, assetPath+".stream", False)
+
+    HZDEditor = bpy.context.scene.HZDEditor
+    HZDEditor.HZDPath = filePath
+
+    ReadCoreFile()
+    skeletonFile = asset.LODGroups[0].LODList[0].meshNameBlock.skeletonPath
+    say(skeletonFile)
+
+    assetSkeletonFile = AM.FindFile(skeletonFile + ".core")
+    fileSkeletonPath = AM.ExtractFile(assetSkeletonFile, skeletonFile + ".core", False)
+    HZDEditor.SkeletonPath = fileSkeletonPath
+    return
+
 def ExtractTexture(outWorkspace,texPath):
+    texAs = None
     def BuildDDSHeader(tex:Texture) -> bytes:
         r = BytePacker
         data = bytes()
@@ -897,33 +963,42 @@ def ExtractTexture(outWorkspace,texPath):
     def ParseTexture(filePath):
         #Parse Extracted Texture core
         with open(filePath,'rb') as f:
+            nonlocal texAs
             texAs = TextureAsset(f)
 
         outPath = pathlib.Path(filePath)
         #Extract Stream
         for t in texAs.textures:
-            streamData = bytes()
-            if t.streamSize32 > 0:
-                streamFileEntry = AM.FindFile(texPath+".core.stream")
-                streamFilePath = AM.ExtractFile(streamFileEntry,texPath,True)
-                with open(streamFilePath,'rb') as s:
-                    s.seek(t.streamOffset)
-                    streamData = s.read(t.streamSize64)
-            outImage = outPath.with_name(t.name+".dds")
+            outImage = outPath.with_name(t.name + ".dds")
             if os.path.exists(outImage):
                 textureFiles.append(outImage)
             else:
-                with open(outImage,'wb') as w:
-                    w.write(BuildDDSHeader(t))
-                    w.write(streamData)
-                    w.write(t.thumbnail)
+                streamData = bytes()
+                if t.streamSize32 > 0:
+                    # Check if .stream was already there
+                    if os.path.exists(outWorkspace + texPath+".core.stream"):
+                        streamFilePath = outWorkspace + texPath+".core.stream"
+                    else:
+                        streamFileEntry = AM.FindFile(texPath+".core.stream")
+                        streamFilePath = AM.ExtractFile(streamFileEntry,texPath,True)
+                    with open(streamFilePath,'rb') as s:
+                        s.seek(t.streamOffset)
+                        streamData = s.read(t.streamSize64)
+
+                if os.path.exists(outImage):
                     textureFiles.append(outImage)
+                else:
+                    with open(outImage,'wb') as w:
+                        w.write(BuildDDSHeader(t))
+                        w.write(streamData)
+                        w.write(t.thumbnail)
+                        textureFiles.append(outImage)
 
     textureFiles = []
     AM = ArchiveManager()
+
     if os.path.exists(outWorkspace+texPath+".core"):
         ParseTexture(outWorkspace+texPath+".core")
-        return textureFiles
     else:
         #Extract Core
         texFileEntry = AM.FindFile(texPath+".core")
@@ -931,26 +1006,107 @@ def ExtractTexture(outWorkspace,texPath):
 
         ParseTexture(filePath)
 
-    return textureFiles
+    return textureFiles, texAs
 def CreateMaterial(obj,matblock,meshName):
     HZDEditor = bpy.context.scene.HZDEditor
+
+    UsageType_ValueMap = {"Invalid":"Float",  # 0
+                 "Color":"Color",  # 1
+                 "Alpha":"Float",  # 2
+                 "Normal":"Vector",  # 3
+                 "Reflectance":"Float",  # 4
+                 "AO":"Float",  # 5
+                 "Roughness":"Float",  # 6
+                 "Height":"Float",  # 7
+                 "Mask":"Float",  # 8
+                 "Mask_Alpha":"Float",  # 9
+                 "Incandescence":"Float",  # 10
+                 "Translucency_Diffusion":"Float",  # 11
+                 "Translucency_Amount":"Float",  # 12
+                 "Misc_01":"Float",  # 13
+                 "Count":"Float"}  # 14
+
+
     if bpy.data.materials.find(str(matblock.shaderName+"___"+meshName)) == -1:
         mat = bpy.data.materials.new(name=str(matblock.shaderName+"___"+meshName))
         obj.data.materials.append(mat)
         mat.use_nodes = True
         for i,t in enumerate(matblock.uniqueTextures):
-            images = ExtractTexture(HZDEditor.WorkAbsPath, t)
+            images,texAsset = ExtractTexture(HZDEditor.WorkAbsPath, t)
 
-            for ii, image in enumerate(images):
-                texNode = mat.node_tree.nodes.new('ShaderNodeTexImage')
-                texNode.name = t
+            if texAsset.texSet is not None:
+
+                # Create Node Group
                 imageName = t.split('/')
-                texNode.label = imageName[len(imageName)-1]
-                texNode.location = -400*((i+ii)%5)-400,-300*int((i+ii)/5)+600
-                bpy.data.images.load(str(image))
-                texNode.image = bpy.data.images[image.name]
+                imageName= imageName[len(imageName) - 1]
+                texSetGroup = bpy.data.node_groups.new(imageName,"ShaderNodeTree")
+                texSetGroup_output = texSetGroup.nodes.new("NodeGroupOutput")
+
+                for ii, setT in enumerate(texAsset.texSet.textures):
+                    # Create Image Node
+                    texNode = texSetGroup.nodes.new('ShaderNodeTexImage')
+                    texNode.name = t
+                    texNode.label = imageName
+                    texNode.location = -400, -250 * ii + len(images) * 125
+                    bpy.data.images.load(str(images[ii]))
+                    texNode.image = bpy.data.images[images[ii].name]
+                    print(imageName)
+
+
+                    # RGB CHANNEL OUTPUT
+                    if all(cha.usageType == setT.channelTypes[0].usageType for cha in setT.channelTypes[0:3]):
+                        # no need to break the color
+                        outputType = UsageType_ValueMap[setT.channelTypes[0].usageType]
+                        texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
+                        # print(setT.channelTypes[0].usageType)
+                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[0])
+
+                    else:
+                        texNode.location = texNode.location[0] - 400, texNode.location[1]  # move to the left
+                        sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
+                        sepRGBNode.location = texNode.location[0] + 400, texNode.location[1]
+                        for ic,cha in enumerate(setT.channelTypes[0:3]):
+                            if cha.usageType == "Invalid":
+                                pass
+                            else:
+                                separateRGB = True
+                                # we gotta separate RGB
+                                texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
+                                # print("separate RGB ",cha.usageType)
+
+                                texSetGroup.links.new(sepRGBNode.inputs[0], texNode.outputs[0])
+                                texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],sepRGBNode.outputs[ic])
+
+
+
+                    # ALPHA CHANNEL OUTPUT
+                    if setT.channelTypes[3].usageType in ("Invalid","Normal"):
+                        # print("pass alpha")
+                        pass
+                    else:
+                        useAlphaChannel = True
+                        texSetGroup.outputs.new("NodeSocketFloat", setT.channelTypes[3].usageType)
+                        # print("alpha ", setT.channelTypes[3].usageType)
+                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[1])
+
+                shaderGroup = mat.node_tree.nodes.new("ShaderNodeGroup")
+                shaderGroup.node_tree = bpy.data.node_groups[texSetGroup.name]
+                shaderGroup.location = -400,-300*i+600
+
+
+
+            else:
+                for ii, image in enumerate(images):
+                    texNode = mat.node_tree.nodes.new('ShaderNodeTexImage')
+                    texNode.name = t
+                    imageName = t.split('/')
+                    texNode.label = imageName[len(imageName)-1]
+                    texNode.location = -400*ii-400,-300*i+600
+                    bpy.data.images.load(str(image))
+                    texNode.image = bpy.data.images[image.name]
 
     else:
+        say("Material already exists")
         mat = bpy.data.materials[matblock.shaderName+"___"+meshName]
         obj.data.materials.append(mat)
 
@@ -978,9 +1134,10 @@ def CreateSkeleton():
             Bones.append(boneName)
             ParentIndices.append(parentIndex)
 
-    armature = bpy.data.armatures.new(sktName+"Data")
+    armatureName = str(ArchiveManager.get_file_hash(asset.LODGroups[0].LODList[0].meshNameBlock.skeletonPath))
+    armature = bpy.data.armatures.new(armatureName)
     obj = bpy.data.objects.new(sktName, armature)
-    bpy.context.collection.objects.link(obj)
+    bpy.context.scene.collection.objects.link(obj)
     bpy.context.view_layer.objects.active = obj
     HZDEditor.SkeletonName = obj.name
 
@@ -998,6 +1155,8 @@ def CreateSkeleton():
         bone.transform(BoneMatrices[b])
 
     bpy.ops.object.mode_set(mode='OBJECT')
+
+    return obj
 
 def PackVertex(f,vertex,stride,half=False,boneCount=0):
     p = BytePacker()
@@ -1423,6 +1582,7 @@ class DataBlock:
 class TextureAsset:
     def __init__(self,f):
         self.textures = []
+        self.texSet = None
         r = ByteReader
         ID = r.int64(f)
         f.seek(-8,1)
@@ -1449,23 +1609,25 @@ class TextureSet(DataBlock):
                      "Height",  # 7
                      "Mask",    # 8
                      "Mask_Alpha",  # 9
-                     "Incandescence",
-                     "Translucency_Diffusion",
-                     "Translucency_Amount",
-                     "Misc_01",
-                     "Count"]
+                     "Incandescence", # 10
+                     "Translucency_Diffusion", # 11
+                     "Translucency_Amount", # 12
+                     "Misc_01", # 13
+                     "Count"] # 14
     class TextureDetails:
         class ChannelDetails:
             def __init__(self,f):
                 r = ByteReader
                 self.usageTypeIndex = r.uint8(f)
                 self.usageType = TextureSet.TextureUsage.UsageType[self.usageTypeIndex & 0x0F]
+            def __str__(self):
+                return self.usageType
 
         def __init__(self,f):
             r = ByteReader
-            f.seek(9)
+            f.seek(9,1)
             self.channelTypes = [self.ChannelDetails(f) for _ in range(4)]
-            f.seek(4)
+            f.seek(4,1)
             refType = r.uint8(f)
             if refType > 0:
                 self.textureRef = r.uuid(f)
@@ -1718,6 +1880,7 @@ class MeshNameBlock(DataBlock):
     def __init__(self, f):
         super().__init__(f)
         self.name = ""
+        self.skeletonPath = ""
 
         self.ParseMeshName(f)
 
@@ -1725,6 +1888,8 @@ class MeshNameBlock(DataBlock):
         r = ByteReader()
         f.seek(16,1)
         self.name = r.hashtext(f)
+        f.seek(65,1)
+        self.skeletonPath = r.hashtext(f)
         self.EndBlock(f)
 class MeshInfo:
     def __init__(self,f):
@@ -2121,6 +2286,24 @@ class SearchForOffsets(bpy.types.Operator):
     def execute(self,context):
         ReadCoreFile()
         return{'FINISHED'}
+class ExtractHZDAsset(bpy.types.Operator):
+    """Extract Asset directly from Horizon .bin files"""
+    bl_idname = "object.extract_asset"
+    bl_label = "Extract"
+
+    def execute(self,context):
+        HZDEditor = context.scene.HZDEditor
+        ExtractAsset(HZDEditor.AssetPath)
+        return {'FINISHED'}
+
+class ImportAll(bpy.types.Operator):
+    """Imports absolutely every meshes."""
+    bl_idname = "object.import_all"
+    bl_label = "Import All"
+
+    def execute(self,context):
+        return {'FINISHED'}
+
 class ImportHZD(bpy.types.Operator):
     """Imports the mesh"""
     bl_idname = "object.import_hzd"
@@ -2159,7 +2342,7 @@ class ImportSkeleton(bpy.types.Operator):
     bl_label = "Import Skeleton"
 
     def execute(self, context):
-        CreateSkeleton()
+        o = CreateSkeleton()
         return {'FINISHED'}
 class ExportHZD(bpy.types.Operator):
     """Exports the mesh based on object name"""
@@ -2241,6 +2424,12 @@ class HZDPanel(bpy.types.Panel):
         HZDEditor = context.scene.HZDEditor
 
         row = layout.row()
+        row.prop(HZDEditor, "AssetPath")
+        row.operator("object.extract_asset",icon="EXPORT")
+
+        row = layout.row()
+
+        row = layout.row()
         row.prop(HZDEditor, "WorkPath")
         row = layout.row()
         row.prop(HZDEditor, "GamePath")
@@ -2249,8 +2438,6 @@ class HZDPanel(bpy.types.Panel):
         row.prop(HZDEditor,"HZDPath")
         row = layout.row()
         row.prop(HZDEditor, "SkeletonPath")
-        row = layout.row()
-        row.label(text=HZDEditor.SkeletonName)
 
         row = layout.row()
         row.operator("object.hzd_offsets", icon='ZOOM_ALL')
@@ -2420,34 +2607,29 @@ class LodGroupPanel(bpy.types.Panel):
                         else:
                             row.label(text="Not able to Import for now.")
 
+classes=[ImportHZD,
+         ImportLodHZD,
+         ImportSkeleton,
+         ExportHZD,
+         ExportLodHZD,
+         SaveLodDistances,
+         HZDSettings,
+         SearchForOffsets,
+         HZDPanel,
+         LODDistancePanel,
+         LodObjectPanel,
+         LodGroupPanel,
+         ShowUsedTextures,
+         ExtractHZDAsset]
+
 def register():
-    bpy.utils.register_class(ImportHZD)
-    bpy.utils.register_class(ImportLodHZD)
-    bpy.utils.register_class(ImportSkeleton)
-    bpy.utils.register_class(ExportHZD)
-    bpy.utils.register_class(ExportLodHZD)
-    bpy.utils.register_class(SaveLodDistances)
-    bpy.utils.register_class(HZDSettings)
-    bpy.utils.register_class(SearchForOffsets)
+    for c in classes:
+        bpy.utils.register_class(c)
     bpy.types.Scene.HZDEditor = bpy.props.PointerProperty(type=HZDSettings)
-    bpy.utils.register_class(HZDPanel)
-    bpy.utils.register_class(LODDistancePanel)
-    bpy.utils.register_class(LodObjectPanel)
-    bpy.utils.register_class(LodGroupPanel)
-    bpy.utils.register_class(ShowUsedTextures)
+
 def unregister():
-    bpy.utils.unregister_class(HZDPanel)
-    bpy.utils.unregister_class(LODDistancePanel)
-    bpy.utils.unregister_class(LodObjectPanel)
-    bpy.utils.unregister_class(LodGroupPanel)
-    bpy.utils.unregister_class(ImportHZD)
-    bpy.utils.unregister_class(ImportLodHZD)
-    bpy.utils.unregister_class(ImportSkeleton)
-    bpy.utils.unregister_class(ExportHZD)
-    bpy.utils.unregister_class(ExportLodHZD)
-    bpy.utils.unregister_class(SaveLodDistances)
-    bpy.utils.unregister_class(SearchForOffsets)
-    bpy.utils.unregister_class(ShowUsedTextures)
+    for c in classes:
+        bpy.utils.unregister_class(c)
 if __name__ == "__main__":
     register()
 
