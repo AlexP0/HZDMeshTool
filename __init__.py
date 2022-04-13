@@ -1,4 +1,4 @@
-l_info = {
+bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
@@ -31,7 +31,7 @@ import numpy as np
 import mathutils
 import operator
 # import mmh3
-import pymmh3
+from . import pymmh3
 
 import ctypes
 from ctypes import c_size_t, c_char_p, c_int32
@@ -301,6 +301,48 @@ class ArchiveManager:
         return RealStartOffset, RealEndOffset
 
     def ExtractFile(self,file,filePath, isStream = False):
+        if os.path.exists(bpy.context.scene.HZDEditor.GameAbsPath):
+            say("Game Path is Valid")
+            ## I do not know who the original author of this Oodle class is
+            ## I got it from here https://github.com/REDxEYE/ProjectDecima_python/tree/master/ProjectDecima/utils
+            class Oodle:
+                HZDEditor = bpy.context.scene.HZDEditor
+            
+                # _local_path = Path(__file__).absolute().parent
+                _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
+                # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
+                _compress = _lib.OodleLZ_Compress
+                _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
+                                      c_size_t,
+                                      c_size_t]
+                _compress.restype = c_int32
+                _decompress = _lib.OodleLZ_Decompress
+                _decompress.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_int32, c_int32, c_int32, c_size_t,
+                                        c_size_t,
+                                        c_size_t, c_size_t, c_size_t, c_size_t, c_int32]
+                _decompress.restype = c_int32
+            
+                @staticmethod
+                def decompress(input_buffer: Union[bytes, bytearray], output_size):
+                    out_data_p = ctypes.create_string_buffer(output_size)
+                    in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
+                    result = Oodle._decompress(in_data_p, len(input_buffer), out_data_p, output_size, 0, 0,
+                                               0, 0, 0, 0, 0, 0, 0, 0)
+                    assert result >= 0, 'Error decompressing chunk'
+                    return bytes(out_data_p)
+            
+                @staticmethod
+                def compress(input_buffer: Union[bytes, bytearray], fmt: int = 8, level: int = 4):
+                    def calculate_compression_bound(size):
+                        return size + 274 * ((size + 0x3FFFF) // 0x40000)
+            
+                    out_size = calculate_compression_bound(len(input_buffer))
+                    out_data_p = ctypes.create_string_buffer(out_size)
+                    in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
+            
+                    result = Oodle._compress(fmt, in_data_p, len(input_buffer), out_data_p, level, 0, 0, 0, 0, 0)
+                    assert result >= 0, 'Error compressing chunk'
+                    return bytes(out_data_p[:result])
         oodle = Oodle()
         HZDEditor = bpy.context.scene.HZDEditor
 
@@ -939,7 +981,7 @@ def ExtractTexture(outWorkspace,texPath):
         ddsPF += r.uint32(0)
         ddsPF += r.uint32(0)
         ddsPF += r.uint32(0)
-        
+
         data += ddsPF
         data += r.uint32(0)
         data += r.uint32(0)
@@ -948,7 +990,7 @@ def ExtractTexture(outWorkspace,texPath):
         data += r.uint32(0)
 
         data = b'DDS ' + r.uint32(len(data)+4) + data
-        
+
         dx10 = b''
         assert tex.format in format_map, f"Unmapped image format: {tex.format.name}"
         dx10 += r.uint32(format_map[tex.format].value)
@@ -2632,46 +2674,3 @@ def unregister():
         bpy.utils.unregister_class(c)
 if __name__ == "__main__":
     register()
-
-    if os.path.exists(bpy.context.scene.HZDEditor.GameAbsPath):
-        ## I do not know who the original author of this Oodle class is
-        ## I got it from here https://github.com/REDxEYE/ProjectDecima_python/tree/master/ProjectDecima/utils
-        print("Game Path is Valid")
-        class Oodle:
-            HZDEditor = bpy.context.scene.HZDEditor
-
-            _local_path = Path(__file__).absolute().parent
-            _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
-            # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
-            _compress = _lib.OodleLZ_Compress
-            _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
-                                  c_size_t,
-                                  c_size_t]
-            _compress.restype = c_int32
-            _decompress = _lib.OodleLZ_Decompress
-            _decompress.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_int32, c_int32, c_int32, c_size_t,
-                                    c_size_t,
-                                    c_size_t, c_size_t, c_size_t, c_size_t, c_int32]
-            _decompress.restype = c_int32
-
-            @staticmethod
-            def decompress(input_buffer: Union[bytes, bytearray], output_size):
-                out_data_p = ctypes.create_string_buffer(output_size)
-                in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
-                result = Oodle._decompress(in_data_p, len(input_buffer), out_data_p, output_size, 0, 0,
-                                           0, 0, 0, 0, 0, 0, 0, 0)
-                assert result >= 0, 'Error decompressing chunk'
-                return bytes(out_data_p)
-
-            @staticmethod
-            def compress(input_buffer: Union[bytes, bytearray], fmt: int = 8, level: int = 4):
-                def calculate_compression_bound(size):
-                    return size + 274 * ((size + 0x3FFFF) // 0x40000)
-
-                out_size = calculate_compression_bound(len(input_buffer))
-                out_data_p = ctypes.create_string_buffer(out_size)
-                in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
-
-                result = Oodle._compress(fmt, in_data_p, len(input_buffer), out_data_p, level, 0, 0, 0, 0, 0)
-                assert result >= 0, 'Error compressing chunk'
-                return bytes(out_data_p[:result])
