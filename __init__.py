@@ -31,7 +31,8 @@ import numpy as np
 import mathutils
 import operator
 # import mmh3
-from . import pymmh3
+#from . \
+import pymmh3
 
 import ctypes
 from ctypes import c_size_t, c_char_p, c_int32
@@ -957,6 +958,102 @@ def ExtractAsset(assetPath):
     HZDEditor.SkeletonPath = fileSkeletonPath
     return
 
+def CreateNormalConverterGroup():
+    # Based on mithkr's node group
+    if bpy.data.node_groups.find("HZD Normal Map Converter") != -1:
+        return
+    group = bpy.data.node_groups.new("HZD Normal Map Converter","ShaderNodeTree")
+    group.inputs.new("NodeSocketFloat","Strength")
+    group.inputs["Strength"].default_value = 1.0
+    group.inputs.new("NodeSocketColor","Image")
+    group.inputs["Image"].default_value = (0.5,0.5,1.0,1.0)
+    group.outputs.new("NodeSocketVector","Normal")
+
+    groupIn = group.nodes.new("NodeGroupInput")
+    groupIn.location = -900,20
+    groupOut = group.nodes.new("NodeGroupOutput")
+    groupOut.location = 1285,100
+
+    #NormalMap
+    normalMap = group.nodes.new("ShaderNodeNormalMap")
+    normalMap.location = 1079,88
+    group.links.new(normalMap.inputs[0],groupIn.outputs[0])
+    group.links.new(groupOut.inputs[0],normalMap.outputs[0])
+
+    #Combine RGB
+    combineRGB = group.nodes.new('ShaderNodeCombineRGB')
+    combineRGB.location = 905,-40
+    group.links.new(normalMap.inputs[1],combineRGB.outputs[0])
+
+    #Separate RGB
+    separateRGB = group.nodes.new('ShaderNodeSeparateRGB')
+    separateRGB.location = -720, -60
+    group.links.new(combineRGB.inputs[0],separateRGB.outputs[0])
+    group.links.new(separateRGB.inputs[0],groupIn.outputs[1])
+
+    #InvertGreen
+    invertGreen = group.nodes.new('ShaderNodeInvert')
+    invertGreen.location = -475, -110
+    group.links.new(combineRGB.inputs[1],invertGreen.outputs[0])
+    group.links.new(invertGreen.inputs[1],separateRGB.outputs[1])
+
+    #SquareRoot
+    squareRoot = group.nodes.new('ShaderNodeMath')
+    squareRoot.operation = "SQRT"
+    squareRoot.location = 725, -140
+    group.links.new(combineRGB.inputs[2],squareRoot.outputs[0])
+
+    #Clamp
+    clamp = group.nodes.new('ShaderNodeClamp')
+    clamp.location = 545, -220
+    group.links.new(squareRoot.inputs[0],clamp.outputs[0])
+
+    #Invert
+    invert = group.nodes.new('ShaderNodeInvert')
+    invert.location = 385, -220
+    group.links.new(clamp.inputs[0], invert.outputs[0])
+
+    #Dot Product
+    dot = group.nodes.new('ShaderNodeVectorMath')
+    dot.operation = "DOT_PRODUCT"
+    dot.location = 225,-220
+    group.links.new(invert.inputs[1],dot.outputs[1])
+
+    #Combine XYZ
+    combineXYZ = group.nodes.new('ShaderNodeCombineXYZ')
+    combineXYZ.location = 60, -220
+    group.links.new(dot.inputs[0],combineXYZ.outputs[0])
+    group.links.new(dot.inputs[1],combineXYZ.outputs[0])
+
+    #Subtract X
+    subtractX = group.nodes.new('ShaderNodeMath')
+    subtractX.operation = 'SUBTRACT'
+    subtractX.inputs[1].default_value = 1.0
+    subtractX.location = -120, -180
+    group.links.new(combineXYZ.inputs[0],subtractX.outputs[0])
+
+    # Subtract Y
+    subtractY = group.nodes.new('ShaderNodeMath')
+    subtractY.operation = 'SUBTRACT'
+    subtractY.inputs[1].default_value = 1.0
+    subtractY.location = -120, -340
+    group.links.new(combineXYZ.inputs[1], subtractY.outputs[0])
+
+    # Multiply X
+    multiplyX = group.nodes.new('ShaderNodeMath')
+    multiplyX.operation = 'MULTIPLY'
+    multiplyX.inputs[1].default_value = 2.0
+    multiplyX.location = -280, -180
+    group.links.new(subtractX.inputs[0], multiplyX.outputs[0])
+    group.links.new(invertGreen.outputs[0],multiplyX.inputs[0])
+
+    # Multiply Y
+    multiplyY = group.nodes.new('ShaderNodeMath')
+    multiplyY.operation = 'MULTIPLY'
+    multiplyY.inputs[1].default_value = 2.0
+    multiplyY.location = -280, -340
+    group.links.new(subtractY.inputs[0], multiplyY.outputs[0])
+    group.links.new(multiplyY.inputs[0],separateRGB.outputs[1])
 def ExtractTexture(outWorkspace,texPath):
     texAs = None
     def BuildDDSHeader(tex:Texture) -> bytes:
@@ -1092,16 +1189,42 @@ def CreateMaterial(obj,matblock,meshName):
                     texNode.location = -400, -250 * ii + len(images) * 125
                     bpy.data.images.load(str(images[ii]))
                     texNode.image = bpy.data.images[images[ii].name]
+                    texNode.image.colorspace_settings.name = "Non-Color"
                     print(imageName)
 
 
                     # RGB CHANNEL OUTPUT
                     if all(cha.usageType == setT.channelTypes[0].usageType for cha in setT.channelTypes[0:3]):
                         # no need to break the color
+                        if setT.channelTypes[0].usageType == "Color":
+                            texNode.image.colorspace_settings.name = "sRGB"
                         outputType = UsageType_ValueMap[setT.channelTypes[0].usageType]
                         texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
-                        # print(setT.channelTypes[0].usageType)
                         texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[0])
+
+                    elif all(cha.usageType == "Normal" for cha in setT.channelTypes[0:2]):
+                        # Normal Map
+                        CreateNormalConverterGroup()
+                        normalConverter = texSetGroup.nodes.new("ShaderNodeGroup")
+                        normalConverter.node_tree = bpy.data.node_groups["HZD Normal Map Converter"]
+                        texNode.location = texNode.location[0] - 400, texNode.location[1]  # move to the left
+                        normalConverter.location = texNode.location[0] + 400, texNode.location[1]
+                        texSetGroup.outputs.new('NodeSocketVector',"Normal")
+                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],normalConverter.outputs[0])
+                        texSetGroup.links.new(normalConverter.inputs[1],texNode.outputs[0])
+                        #Blue channel
+                        sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
+                        sepRGBNode.location = texNode.location[0] + 400, texNode.location[1]-140
+                        texSetGroup.outputs.new('NodeSocketFloat', setT.channelTypes[2].usageType)
+
+                        texSetGroup.links.new(sepRGBNode.inputs[0],texNode.outputs[0])
+                        if setT.channelTypes[2].usageType == "Roughness":
+                            invert = texSetGroup.nodes.new("ShaderNodeInvert")
+                            invert.location = texNode.location[0] + 400, texNode.location[1]-280
+                            texSetGroup.links.new(invert.inputs[1],sepRGBNode.outputs[2])
+                            texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],invert.outputs[0])
+                        else:
+                            texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],sepRGBNode.outputs[2])
 
                     else:
                         texNode.location = texNode.location[0] - 400, texNode.location[1]  # move to the left
@@ -1110,11 +1233,15 @@ def CreateMaterial(obj,matblock,meshName):
                         for ic,cha in enumerate(setT.channelTypes[0:3]):
                             if cha.usageType == "Invalid":
                                 pass
+                            elif cha.usageType == "Roughness":
+                                invert = texSetGroup.nodes.new("ShaderNodeInvert")
+                                invert.location = texNode.location[0] + 400, texNode.location[1] - 280
+                                texSetGroup.links.new(invert.inputs[1], sepRGBNode.outputs[ic])
+                                texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
+                                texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],sepRGBNode.outputs[ic])
                             else:
-                                separateRGB = True
                                 # we gotta separate RGB
                                 texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
-                                # print("separate RGB ",cha.usageType)
 
                                 texSetGroup.links.new(sepRGBNode.inputs[0], texNode.outputs[0])
                                 texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],sepRGBNode.outputs[ic])
@@ -1123,12 +1250,9 @@ def CreateMaterial(obj,matblock,meshName):
 
                     # ALPHA CHANNEL OUTPUT
                     if setT.channelTypes[3].usageType in ("Invalid","Normal"):
-                        # print("pass alpha")
                         pass
                     else:
-                        useAlphaChannel = True
                         texSetGroup.outputs.new("NodeSocketFloat", setT.channelTypes[3].usageType)
-                        # print("alpha ", setT.channelTypes[3].usageType)
                         texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[1])
 
                 shaderGroup = mat.node_tree.nodes.new("ShaderNodeGroup")
@@ -1611,9 +1735,14 @@ BlockIDs = {"MeshBlockInfo":4980347625154103665,
 asset = Asset()
 
 class DataBlock:
-    def __init__(self,f):
+    def __init__(self,f,expectedID=0):
         r = ByteReader()
+
+        self.expectedID = expectedID
         self.ID = r.int64(f)
+        if expectedID != 0:
+            if self.ID != self.expectedID:
+                raise Exception("%s  --  Invalid Block ID: got %d expected %d"%(self.__class__.__name__,self.ID ,self.expectedID))
         self.size = r.int32(f)
         self.blockStartOffset = f.tell()
         # print(self.__class__.__name__)
@@ -1903,7 +2032,7 @@ class BoneData:
             BoneMatrices[index] = matrix
 class SkeletonBlock(DataBlock):
     def __init__(self, f):
-        super().__init__(f)
+        super().__init__(f,232082505300933932)
         self.matrixCount = 0
         self.boneData = None
 
@@ -1920,7 +2049,7 @@ class SkeletonBlock(DataBlock):
 
 class MeshNameBlock(DataBlock):
     def __init__(self, f):
-        super().__init__(f)
+        super().__init__(f,10982056603708398958)
         self.name = ""
         self.skeletonPath = ""
 
@@ -1943,7 +2072,7 @@ class MeshInfo:
         f.seek(13,1)
 class MeshBlockInfo(DataBlock):
     def __init__(self,f):
-        super().__init__(f)
+        super().__init__(f,4980347625154103665)
         self.meshBlockCount = 0
         self.meshInfos = []
 
@@ -2025,7 +2154,7 @@ class StuffBlock(DataBlock):
         self.EndBlock(f)
 class VertexBlock(DataBlock):
     def __init__(self,f):
-        super().__init__(f)
+        super().__init__(f,13522917709279820436)
         self.vertexCount = 0
 
         self.streamRefCount = 0
@@ -2089,7 +2218,7 @@ class VertexBlock(DataBlock):
         s.close()
 class FaceBlock(DataBlock):
     def __init__(self,f):
-        super().__init__(f)
+        super().__init__(f,12198706699739407665)
         self.indexCount = 0
         self.posIndexCount = 0
         self.inStream = True
@@ -2185,7 +2314,7 @@ class ShaderBlockInfo():
 
 class MaterialBlock(DataBlock):
     def __init__(self,f):
-        super().__init__(f)
+        super().__init__(f,12029122079492233037)
         self.shaderName = ""
         self.subshaderCount = 0
         self.shaderBlockInfos = []
