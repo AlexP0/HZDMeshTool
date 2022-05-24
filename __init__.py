@@ -30,6 +30,7 @@ from ctypes import c_size_t, c_char_p, c_int32
 from pathlib import Path
 from typing import Union, Dict
 from enum import IntEnum
+import subprocess
 
 class DXGI(IntEnum):
     DXGI_FORMAT_UNKNOWN = 0,
@@ -160,6 +161,12 @@ verbose = True
 def say(string,level=0):
     if verbose:
         print(str(string))
+
+def dbg_interact():
+    __import__('code').interact(local=dict(globals(), **locals()))
+
+# Path to "NVIDIA Texture Tools Exporter" for converting DDS to PNG
+NVTTDefaultPath = Path('C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvtt_export.exe')
 
 class ArchiveManager:
     class BinHeader:
@@ -789,6 +796,9 @@ class HZDSettings(bpy.types.PropertyGroup):
                                            description="Path to the robot_modelhelpers.core file. If not set the tool will try to extract it for you.\n"
                                                        "This is used for placing detachable parts on the robot skeleton.")
 
+    NVTTPath : bpy.props.StringProperty(name="NVTT Path", default=str(NVTTDefaultPath) if os.path.exists(NVTTDefaultPath) else "", subtype='FILE_PATH',
+                                        description="Path to the Nvidia Texture Tool nvtt_export.exe")
+
     LodDistance0: bpy.props.FloatProperty(name="Lod Distance 0")
     LodDistance1: bpy.props.FloatProperty(name="Lod Distance 1")
     LodDistance2: bpy.props.FloatProperty(name="Lod Distance 2")
@@ -1373,7 +1383,13 @@ def ExtractTexture(outWorkspace,texPath):
         outPath = pathlib.Path(filePath)
         #Extract Stream
         for t in texAs.textures:
-            outImage = outPath.with_name(t.name + ".dds")
+            HZDEditor = bpy.context.scene.HZDEditor
+            ddsImage = outPath.with_name(t.name + ".dds")
+            if os.path.exists(HZDEditor.NVTTPath):
+                outImage = outPath.with_name(t.name + ".png")
+            else:
+                outImage = ddsImage
+
             if os.path.exists(outImage):
                 textureFiles.append(outImage)
             else:
@@ -1391,10 +1407,13 @@ def ExtractTexture(outWorkspace,texPath):
                 if os.path.exists(outImage):
                     textureFiles.append(outImage)
                 else:
-                    with open(outImage,'wb') as w:
+                    with open(ddsImage,'wb') as w:
                         w.write(BuildDDSHeader(t))
                         w.write(streamData)
                         w.write(t.thumbnail)
+                        w.close()
+                        if os.path.exists(HZDEditor.NVTTPath):
+                            subprocess.run([str(HZDEditor.NVTTPath), str(ddsImage), "-o", str(outImage)])
                         textureFiles.append(outImage)
 
     textureFiles = []
@@ -3148,6 +3167,9 @@ class HZDPanel(bpy.types.Panel):
         row.prop(HZDEditor,"HZDPath")
         row = layout.row()
         row.prop(HZDEditor, "SkeletonPath")
+
+        row = layout.row()
+        row.prop(HZDEditor, "NVTTPath")
 
         row = layout.row()
         row.operator("object.hzd_offsets", icon='ZOOM_ALL')
