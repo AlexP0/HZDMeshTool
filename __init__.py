@@ -9,6 +9,12 @@ bl_info = {
     }
 
 
+if "bpy" in locals():
+    import imp
+    imp.reload(pymmh3)
+else:
+    from . import pymmh3
+
 import bpy
 import bmesh
 import os
@@ -19,23 +25,11 @@ import mathutils
 import math
 import operator
 
-#uncomment this when publishing
-# from .
-import pymmh3
-
 import ctypes
 from ctypes import c_size_t, c_char_p, c_int32
 from pathlib import Path
 from typing import Union, Dict
 from enum import IntEnum
-
-# comment this when publishing
-if "bpy" in locals():
-    import imp
-    imp.reload(pymmh3)
-else:
-    from . import pymmh3
-
 
 class DXGI(IntEnum):
     DXGI_FORMAT_UNKNOWN = 0,
