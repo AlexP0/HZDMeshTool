@@ -1210,8 +1210,11 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
             print("WARNING: Armature not found")
 
     if HZDEditor.ExtractTextures:
-        #TODO need a better way to find that material. LodMeshResource possibly doesn't exist, material is possibly inside Primitive instead of mesh.
-        matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
+        if isLodMesh:
+            #TODO need a better way to find that material. LodMeshResource possibly doesn't exist, material is possibly inside Primitive instead of mesh.
+            matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
+        else:
+            matblock = asset.MultiMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
         CreateMaterial(obj,matblock,meshName)
 
 def ExtractAsset(assetPath):
@@ -3217,8 +3220,8 @@ class MultiMeshPanel(bpy.types.Panel):
         if asset:
             layout = self.layout
             HZDEditor = context.scene.HZDEditor
-            mainRow = layout.row()
             for imm, mm in enumerate(asset.MultiMeshResources):
+                mainRow = layout.row()
                 box = mainRow.box()
                 box.label(text="MULTI MESH", icon='SNAP_VOLUME')
                 for il, l in enumerate(mm.meshList):
