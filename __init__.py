@@ -168,6 +168,94 @@ def dbg_interact():
 # Path to "NVIDIA Texture Tools Exporter" for converting DDS to PNG
 NVTTDefaultPath = Path('C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvtt_export.exe')
 
+# -----------------------------------------------------------------------------
+# Node Adding Operator
+#
+class NODE_OT_HZDMT_add(bpy.types.Operator):
+    """Add a HZD Mesh Tool node group"""
+    bl_idname = "node.hzdmt_add"
+    bl_label = "Add HZD Mesh Tool node group"
+    bl_description = "Add HZD Mesh Tool node group"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    filepath: bpy.props.StringProperty(
+        subtype='FILE_PATH',
+    )
+    group_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        if bpy.data.node_groups.find(self.group_name) == -1:
+            with bpy.data.libraries.load(self.filepath, link=True) as (data_from, data_to):
+                assert(self.group_name in data_from.node_groups)
+                data_to.node_groups = [self.group_name]
+        node_type = {
+            "ShaderNodeTree": "ShaderNodeGroup",
+            "CompositorNodeTree": "CompositorNodeGroup",
+            "TextureNodeTree": "TextureNodeGroup",
+            "GeometryNodeTree": "GeometryNodeGroup",
+        }[type(context.space_data.edit_tree).__name__]
+        bpy.ops.node.add_node('INVOKE_DEFAULT', type=node_type, use_transform=True, settings=[{"name":"node_tree", "value":"bpy.data.node_groups['" + self.group_name + "']"}])
+        return {'FINISHED'}
+
+#
+# Node menu list
+#
+def node_hzdmt_cache(reload=False):
+    dirpath = os.path.dirname(__file__) # addon path
+
+    if node_hzdmt_cache._node_cache_path != dirpath:
+        reload = True
+
+    node_cache = node_hzdmt_cache._node_cache
+    if reload:
+        node_cache = []
+    if node_cache:
+        return node_cache
+
+    for filepath in Path(dirpath).rglob('*.blend'):
+        with bpy.data.libraries.load(str(filepath)) as (data_from, data_to):
+            for group_name in data_from.node_groups:
+                node_cache.append((group_name, str(filepath)))
+
+    node_cache = sorted(node_cache)
+
+    node_hzdmt_cache._node_cache = node_cache
+    node_hzdmt_cache._node_cache_path = dirpath
+
+    return node_cache
+
+node_hzdmt_cache._node_cache = []
+node_hzdmt_cache._node_cache_path = ""
+
+class NODE_MT_HZDMT_add(bpy.types.Menu):
+    bl_label = "Node HZD Mesh Tool"
+
+    def draw(self, context):
+        layout = self.layout
+
+        try:
+            node_items = node_hzdmt_cache()
+        except Exception as ex:
+            node_items = ()
+            layout.label(text=repr(ex), icon='ERROR')
+
+        for group_name, filepath in node_items:
+            if not group_name.startswith("_"):
+                props = layout.operator(
+                    NODE_OT_HZDMT_add.bl_idname,
+                    text=group_name,
+                )
+                props.filepath = filepath
+                props.group_name = group_name
+
+def add_node_button(self, context):
+    self.layout.menu(
+        NODE_MT_HZDMT_add.__name__,
+        text="HZD Mesh Tool",
+        icon='PLUGIN',
+    )
+# -----------------------------------------------------------------------------
+
 class ArchiveManager:
     class BinHeader:
         def __init__(self):
@@ -3417,7 +3505,7 @@ class SingularMeshPanel(bpy.types.Panel):
                     row.label(text="Not able to Import for now.")
 
 classes=[ImportHZD,
-        ImportAll,
+         ImportAll,
          ImportLodHZD,
          ImportSkeleton,
          ExportHZD,
@@ -3431,15 +3519,20 @@ classes=[ImportHZD,
          LodGroupPanel,
          ShowUsedTextures,
          ExtractHZDAsset,
-         SingularMeshPanel]
+         SingularMeshPanel,
+         NODE_OT_HZDMT_add,
+         NODE_MT_HZDMT_add]
 
 def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.HZDEditor = bpy.props.PointerProperty(type=HZDSettings)
+    bpy.types.NODE_MT_add.append(add_node_button)
 
 def unregister():
     for c in classes:
         bpy.utils.unregister_class(c)
+    bpy.types.NODE_MT_add.remove(add_node_button)
+
 if __name__ == "__main__":
     register()

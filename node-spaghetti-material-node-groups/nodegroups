@@ -1,0 +1,8 @@
+Normal Map Nodegroups:
+
+NormalMap_Combine-PD: ................combines normal maps partial derivatives.
+NormalMap_Combine-Orientation: .......combines normal maps by reorienting detail onto base
+NormalMap_Combine-Rotation: ..........combines normal maps by rotating detail onto base
+NormalMap_Blend-PD: ..................blends two normal maps together by Combine-PD
+NormalMap_Blend-Orientation: .........blends two normal maps together by Combine-Orientation
+NormalMap_Scale: .....................scales a normal map
