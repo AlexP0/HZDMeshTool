@@ -904,6 +904,7 @@ class HZDSettings(bpy.types.PropertyGroup):
     LodDistance14: bpy.props.FloatProperty(name="Lod Distance 14")
     LodDistance15: bpy.props.FloatProperty(name="Lod Distance 15")
     ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False,description="Toggle the extraction of textures. When importing a mesh, texture will be detected and extracted to the Workspace directory.")
+    OverwriteTextures : bpy.props.BoolProperty(name="Overwrite Textures",default=False,description="Overwrite existing textures, when textures will be extracted to the Workspace directory.")
 
 def ParsePosition(f,storageType):
     r = ByteReader
@@ -1481,7 +1482,7 @@ def ExtractTexture(outWorkspace,texPath):
             else:
                 outImage = ddsImage
 
-            if os.path.exists(outImage):
+            if outImage.exists() and not HZDEditor.OverwriteTextures:
                 textureFiles.append(outImage)
             else:
                 streamData = bytes()
@@ -1494,18 +1495,17 @@ def ExtractTexture(outWorkspace,texPath):
                     with open(streamFilePath,'rb') as s:
                         s.seek(t.streamOffset)
                         streamData = s.read(t.streamSize64)
+                        s.close()
 
-                if os.path.exists(outImage):
+                with ddsImage.open(mode='wb') as w:
+                    w.write(BuildDDSHeader(t))
+                    w.write(streamData)
+                    w.write(t.thumbnail)
+                    w.close()
+                    if os.path.exists(HZDEditor.NVTTPath):
+                        subprocess.run([str(HZDEditor.NVTTPath), str(ddsImage), "-o", str(outImage)])
+                        ddsImage.unlink(missing_ok=True)
                     textureFiles.append(outImage)
-                else:
-                    with open(ddsImage,'wb') as w:
-                        w.write(BuildDDSHeader(t))
-                        w.write(streamData)
-                        w.write(t.thumbnail)
-                        w.close()
-                        if os.path.exists(HZDEditor.NVTTPath):
-                            subprocess.run([str(HZDEditor.NVTTPath), str(ddsImage), "-o", str(outImage)])
-                        textureFiles.append(outImage)
 
     textureFiles = []
     AM = ArchiveManager()
@@ -3269,6 +3269,7 @@ class HZDPanel(bpy.types.Panel):
             row.operator("object.import_skt",icon="ARMATURE_DATA")
             row = layout.row()
             row.prop(HZDEditor,"ExtractTextures")
+            row.prop(HZDEditor,"OverwriteTextures")
             row = layout.row()
             row.operator("object.import_all",icon="OUTLINER_OB_LIGHTPROBE")
         mainRow = layout.row()
