@@ -1429,7 +1429,7 @@ def ExtractTexture(outWorkspace,texPath):
         flags = b'\x07\x10\x00\x00'
         data += flags
 
-        data += r.uint32(tex.height)
+        data += r.uint32(tex.height * tex.arraySize if tex.type == Texture.TextureType['_2DARRAY'] else tex.height)
         data += r.uint32(tex.width)
         data += r.uint32(tex.thumbnailLength + tex.streamSize32)
         data += r.uint32(0)
@@ -2333,16 +2333,21 @@ class Texture(DataBlock):
         BC6U = 0x49,
         BC6S = 0x4A,
         BC7 = 0x4B
+    class TextureType(IntEnum):
+        _2D = 0x0,
+        _3D = 0x1,
+        CUBE_MAP = 0x2,
+        _2DARRAY = 0x3
     def __init__(self,f):
         super().__init__(f)
         r = ByteReader
         self.name = r.hashtext(f)
-        f.seek(2,1)
+        self.type : Texture.TextureType = self.TextureType(r.uint16(f))
         width = r.uint16(f)
         self.width = width & 0x3FFF
         height = r.uint16(f)
         self.height = height & 0x3FFF
-        f.seek(2,1)
+        self.arraySize = r.uint16(f)
         f.seek(1,1)
         self.format : Texture.PixelFormat = self.PixelFormat(r.uint8(f))
         f.seek(2,1)
