@@ -1326,102 +1326,16 @@ def ExtractAsset(assetPath):
     HZDEditor.SkeletonPath = fileSkeletonPath
     return
 
-def CreateNormalConverterGroup():
-    # Based on mithkr's node group
-    if bpy.data.node_groups.find("HZD Normal Map Converter") != -1:
-        return
-    group = bpy.data.node_groups.new("HZD Normal Map Converter","ShaderNodeTree")
-    group.inputs.new("NodeSocketFloat","Strength")
-    group.inputs["Strength"].default_value = 1.0
-    group.inputs.new("NodeSocketColor","Image")
-    group.inputs["Image"].default_value = (0.5,0.5,1.0,1.0)
-    group.outputs.new("NodeSocketVector","Normal")
+def LoadNodeGroup(group_name):
+    if bpy.data.node_groups.find(group_name) != -1:
+        return(group_name)
 
-    groupIn = group.nodes.new("NodeGroupInput")
-    groupIn.location = -900,20
-    groupOut = group.nodes.new("NodeGroupOutput")
-    groupOut.location = 1285,100
+    filepath = dict(node_hzdmt_cache())[group_name]
+    with bpy.data.libraries.load(filepath, link=not(group_name.startswith("_"))) as (data_from, data_to):
+        assert(group_name in data_from.node_groups)
+        data_to.node_groups = [group_name]
+    return(group_name)
 
-    #NormalMap
-    normalMap = group.nodes.new("ShaderNodeNormalMap")
-    normalMap.location = 1079,88
-    group.links.new(normalMap.inputs[0],groupIn.outputs[0])
-    group.links.new(groupOut.inputs[0],normalMap.outputs[0])
-
-    #Combine RGB
-    combineRGB = group.nodes.new('ShaderNodeCombineRGB')
-    combineRGB.location = 905,-40
-    group.links.new(normalMap.inputs[1],combineRGB.outputs[0])
-
-    #Separate RGB
-    separateRGB = group.nodes.new('ShaderNodeSeparateRGB')
-    separateRGB.location = -720, -60
-    group.links.new(combineRGB.inputs[0],separateRGB.outputs[0])
-    group.links.new(separateRGB.inputs[0],groupIn.outputs[1])
-
-    #InvertGreen
-    invertGreen = group.nodes.new('ShaderNodeInvert')
-    invertGreen.location = -475, -110
-    group.links.new(combineRGB.inputs[1],invertGreen.outputs[0])
-    group.links.new(invertGreen.inputs[1],separateRGB.outputs[1])
-
-    #SquareRoot
-    squareRoot = group.nodes.new('ShaderNodeMath')
-    squareRoot.operation = "SQRT"
-    squareRoot.location = 725, -140
-    group.links.new(combineRGB.inputs[2],squareRoot.outputs[0])
-
-    #Clamp
-    clamp = group.nodes.new('ShaderNodeClamp')
-    clamp.location = 545, -220
-    group.links.new(squareRoot.inputs[0],clamp.outputs[0])
-
-    #Invert
-    invert = group.nodes.new('ShaderNodeInvert')
-    invert.location = 385, -220
-    group.links.new(clamp.inputs[0], invert.outputs[0])
-
-    #Dot Product
-    dot = group.nodes.new('ShaderNodeVectorMath')
-    dot.operation = "DOT_PRODUCT"
-    dot.location = 225,-220
-    group.links.new(invert.inputs[1],dot.outputs[1])
-
-    #Combine XYZ
-    combineXYZ = group.nodes.new('ShaderNodeCombineXYZ')
-    combineXYZ.location = 60, -220
-    group.links.new(dot.inputs[0],combineXYZ.outputs[0])
-    group.links.new(dot.inputs[1],combineXYZ.outputs[0])
-
-    #Subtract X
-    subtractX = group.nodes.new('ShaderNodeMath')
-    subtractX.operation = 'SUBTRACT'
-    subtractX.inputs[1].default_value = 1.0
-    subtractX.location = -120, -180
-    group.links.new(combineXYZ.inputs[0],subtractX.outputs[0])
-
-    # Subtract Y
-    subtractY = group.nodes.new('ShaderNodeMath')
-    subtractY.operation = 'SUBTRACT'
-    subtractY.inputs[1].default_value = 1.0
-    subtractY.location = -120, -340
-    group.links.new(combineXYZ.inputs[1], subtractY.outputs[0])
-
-    # Multiply X
-    multiplyX = group.nodes.new('ShaderNodeMath')
-    multiplyX.operation = 'MULTIPLY'
-    multiplyX.inputs[1].default_value = 2.0
-    multiplyX.location = -280, -180
-    group.links.new(subtractX.inputs[0], multiplyX.outputs[0])
-    group.links.new(invertGreen.outputs[0],multiplyX.inputs[0])
-
-    # Multiply Y
-    multiplyY = group.nodes.new('ShaderNodeMath')
-    multiplyY.operation = 'MULTIPLY'
-    multiplyY.inputs[1].default_value = 2.0
-    multiplyY.location = -280, -340
-    group.links.new(subtractY.inputs[0], multiplyY.outputs[0])
-    group.links.new(multiplyY.inputs[0],separateRGB.outputs[1])
 def ExtractTexture(outWorkspace,texPath):
     texAs = None
     def BuildDDSHeader(tex:Texture) -> bytes:
@@ -1467,6 +1381,7 @@ def ExtractTexture(outWorkspace,texPath):
         data += dx10
 
         return data
+
     def ParseTexture(filePath):
         #Parse Extracted Texture core
         with open(filePath,'rb') as f:
@@ -1520,6 +1435,7 @@ def ExtractTexture(outWorkspace,texPath):
         ParseTexture(filePath)
 
     return textureFiles, texAs
+
 def CreateMaterial(obj,matblock,meshName):
     HZDEditor = bpy.context.scene.HZDEditor
 
@@ -1531,7 +1447,7 @@ def CreateMaterial(obj,matblock,meshName):
                  "AO":"Float",  # 5
                  "Roughness":"Float",  # 6
                  "Height":"Float",  # 7
-                 "Mask":"Float",  # 8
+                 "Mask":"Color",  # 8
                  "Mask_Alpha":"Float",  # 9
                  "Incandescence":"Float",  # 10
                  "Translucency_Diffusion":"Float",  # 11
@@ -1539,115 +1455,309 @@ def CreateMaterial(obj,matblock,meshName):
                  "Misc_01":"Float",  # 13
                  "Count":"Float"}  # 14
 
+    BaseTextureOutputs = {"Detail Strength": ("Float", 0.0),
+                 "Fur Mask": ("Float", 0.0),
+                 "Skin Mask": ("Float", 0.0),
+                 "AO": ("Float", 1.0),
+                 "Subsurface": ("Float", 0.0),
+                 "Translucency": ("Float", 0.0),
+                 "Reflectance": ("Float", 0.25),
+                 "Roughness": ("Float", 0.5),
+                 "Alpha": ("Float", 1.0),
+                 "Normal": ("Vector", (0.0,0.0,1.0)),
+                 "Normal Color": ("Color", (0.5,0.5,0.0,1.0)),
+                 "Color": ("Color", (1.0,1.0,1.0,1.0)),
+                 "CID Mask": ("Color", (0.0,0.0,0.0,1.0)),
+                 "Array Mask": ("Float", 0.0)}
 
-    if bpy.data.materials.find(str(matblock.shaderName+"___"+meshName)) == -1:
-        mat = bpy.data.materials.new(name=str(matblock.shaderName+"___"+meshName))
+    BaseTextureBSDFLinks = ("AO",
+                 "Subsurface",
+                 "Translucency",
+                 "Reflectance",
+                 "Alpha")
+
+    DetailTextureOutputs = {"Normal": ("Vector", (0.0,0.0,1.0)),
+                 "Normal Color": ("Color", (0.5,0.5,0.0,1.0)),
+                 "Color": ("Color", (0.5,0.5,0.5,1.0))}
+
+    import hashlib
+    baseTexName = "unknown"
+    for t in matblock.uniqueTextures:
+        if t.startswith('models'):
+            baseTexName = t.split('/')
+            baseTexName = baseTexName[len(baseTexName) - 1]
+            break
+    materialName = baseTexName + "_" +  hashlib.sha224(str(matblock.uniqueTextures).encode("utf8")).hexdigest()[:10]
+
+    frameNodes = {}
+    frame_y = {}
+    if bpy.data.materials.find(materialName) == -1:
+        # Create new material and replace 'Principled BSDF' with 'HZD BSDF'
+        mat = bpy.data.materials.new(name=materialName)
         obj.data.materials.append(mat)
         mat.use_nodes = True
+        mat.node_tree.nodes.remove(mat.node_tree.nodes.get('Principled BSDF'))
+        matNode = mat.node_tree.nodes.get('Material Output')
+        matNode.location = 900.0, 300.0
+
+        bsdfNode = mat.node_tree.nodes.new('ShaderNodeGroup')
+        bsdfNode.node_tree = bpy.data.node_groups[LoadNodeGroup('HZD BSDF')]
+        bsdfNode.width = 250.0
+        bsdfNode.location = 600.0, 300.0
+        mat.node_tree.links.new(bsdfNode.outputs['BSDF'], matNode.inputs['Surface'])
+
+        # Add 'Combine Textures' Node Group and connect with 'HZD BSDF'
+        combineTexNode = mat.node_tree.nodes.new('ShaderNodeGroup')
+        combineTexNode.node_tree = bpy.data.node_groups[LoadNodeGroup('Combine Textures')]
+        combineTexNode.width = 200.0
+        combineTexNode.location = 320.0, -40.0
+        combineTexNode.inputs['Detail Roughness'].hide = True
+        mat.node_tree.links.new(combineTexNode.outputs['Roughness'], bsdfNode.inputs['Roughness'])
+        mat.node_tree.links.new(combineTexNode.outputs['Normal'], bsdfNode.inputs['Normal'])
+        mat.node_tree.links.new(combineTexNode.outputs['Color'], bsdfNode.inputs['Base Color'])
+
+        # Create Frame Node for texture grouping
+        for i,fn in enumerate(('models', 'textures', 'shaders', 'shader_libraries')):
+            frameNodes[fn] = mat.node_tree.nodes.new('NodeFrame')
+            frameNodes[fn].label = fn
+            frameNodes[fn].shrink = True
+            frameNodes[fn].location = -350 if fn == "models" else -350 * i, 220.0 if fn == "models" else -380.0
+            frame_y[fn] = -40.0
+
+        texDetailMapArray = None
+
+        # Iterate through textures
         for i,t in enumerate(matblock.uniqueTextures):
             images,texAsset = ExtractTexture(HZDEditor.WorkAbsPath, t)
+            frameName = t.split('/')[0]
+            if frameName == 'models':
+                tiling = False
+            else:
+                tiling = True
 
             if texAsset.texSet is not None:
 
-                # Create Node Group
-                imageName = t.split('/')
-                imageName= imageName[len(imageName) - 1]
-                texSetGroup = bpy.data.node_groups.new(imageName,"ShaderNodeTree")
-                texSetGroup_output = texSetGroup.nodes.new("NodeGroupOutput")
+                groupName = t.split('/')
+                groupName = groupName[len(groupName) - 1]
+                groupHash = hashlib.sha224(t.encode("utf8")).hexdigest()[:10]
+                if len(images) > 2 or groupName == baseTexName:
+                    groupOutputs = BaseTextureOutputs
+                else:
+                    groupOutputs = DetailTextureOutputs
+                print(frameName, groupName, groupHash)
 
-                for ii, setT in enumerate(texAsset.texSet.textures):
-                    # Create Image Node
-                    texNode = texSetGroup.nodes.new('ShaderNodeTexImage')
-                    texNode.name = t
-                    texNode.label = imageName
-                    texNode.location = -400, -250 * ii + len(images) * 125
-                    bpy.data.images.load(str(images[ii]))
-                    texNode.image = bpy.data.images[images[ii].name]
-                    texNode.image.colorspace_settings.name = "Non-Color"
-                    print(imageName)
+                if bpy.data.node_groups.find(groupName) == -1:
+                    # Create Node Group for texture set
+                    offset_x = 250.0
+                    offset_y = 0.0
+                    texSetGroup = bpy.data.node_groups.new(groupName,"ShaderNodeTree")
 
+                    # Outputs
+                    texSetGroup_output = texSetGroup.nodes.new("NodeGroupOutput")
+                    for out in groupOutputs:
+                        texSetGroup.outputs.new("NodeSocket" + groupOutputs[out][0], out)
+                        texSetGroup.outputs[out].default_value = groupOutputs[out][1]
+                        texSetGroup_output.inputs[out].hide = True
+                    texSetGroup_output.location = offset_x + 10.0, offset_y + 30.0
 
-                    # RGB CHANNEL OUTPUT
-                    if all(cha.usageType == setT.channelTypes[0].usageType for cha in setT.channelTypes[0:3]):
-                        # no need to break the color
-                        if setT.channelTypes[0].usageType == "Color":
-                            texNode.image.colorspace_settings.name = "sRGB"
-                        outputType = UsageType_ValueMap[setT.channelTypes[0].usageType]
-                        texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
-                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[0])
+                    # Inputs
+                    if tiling:
+                        # Create 'Texture Coordinate' and 'Mapping' to scale textures with 'Tiling' input value
+                        texSetGroup.inputs.new("NodeSocketFloat", "Tiling")
+                        texSetGroup.inputs["Tiling"].default_value = 20.0
+                        texSetGroup.inputs["Tiling"].min_value = 0.0
+                        texSetGroup_input = texSetGroup.nodes.new("NodeGroupInput")
+                        texSetGroup_input.location = offset_x - 900.0, offset_y - 250.0
+                        coordNode = texSetGroup.nodes.new('ShaderNodeTexCoord')
+                        coordNode.location = offset_x - 900.0, offset_y
+                        mappingNode = texSetGroup.nodes.new('ShaderNodeMapping')
+                        mappingNode.location = offset_x - 700.0, offset_y
+                        texSetGroup.links.new(texSetGroup_input.outputs['Tiling'], mappingNode.inputs['Scale'])
+                        texSetGroup.links.new(coordNode.outputs['UV'], mappingNode.inputs['Vector'])
 
-                    elif all(cha.usageType == "Normal" for cha in setT.channelTypes[0:2]):
-                        # Normal Map
-                        CreateNormalConverterGroup()
-                        normalConverter = texSetGroup.nodes.new("ShaderNodeGroup")
-                        normalConverter.node_tree = bpy.data.node_groups["HZD Normal Map Converter"]
-                        texNode.location = texNode.location[0] - 400, texNode.location[1]  # move to the left
-                        normalConverter.location = texNode.location[0] + 400, texNode.location[1]
-                        texSetGroup.outputs.new('NodeSocketVector',"Normal")
-                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],normalConverter.outputs[0])
-                        texSetGroup.links.new(normalConverter.inputs[1],texNode.outputs[0])
-                        #Blue channel
-                        sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
-                        sepRGBNode.location = texNode.location[0] + 400, texNode.location[1]-140
-                        texSetGroup.outputs.new('NodeSocketFloat', setT.channelTypes[2].usageType)
+                    for ii, setT in enumerate(texAsset.texSet.textures):
+                        # Create Image Node
+                        texName = groupName + "%02d" % ii
+                        print("  " + texName)
+                        for cha in setT.channelTypes:
+                            print("    " + cha.usageType)
+                        texNode = texSetGroup.nodes.new('ShaderNodeTexImage')
+                        texNode.location = offset_x - 500.0, offset_y - 50.0 * ii
+                        if tiling:
+                            texSetGroup.links.new(mappingNode.outputs['Vector'], texNode.inputs['Vector'])
+                        # Load image if not yet exists
+                        texNode.image = bpy.data.images.get(images[ii].name, None)
+                        if texNode.image is None:
+                            texNode.image = bpy.data.images.load(str(images[ii]))
+                        texNode.image.colorspace_settings.name = "Non-Color"
+                        texNode.hide = True
 
-                        texSetGroup.links.new(sepRGBNode.inputs[0],texNode.outputs[0])
-                        if setT.channelTypes[2].usageType == "Roughness":
-                            invert = texSetGroup.nodes.new("ShaderNodeInvert")
-                            invert.location = texNode.location[0] + 400, texNode.location[1]-280
-                            texSetGroup.links.new(invert.inputs[1],sepRGBNode.outputs[2])
-                            texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],invert.outputs[0])
-                        else:
-                            texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],sepRGBNode.outputs[2])
+                        # RGB CHANNEL OUTPUT
+                        if all(cha.usageType == "Normal" for cha in setT.channelTypes[0:2]):
+                            # Normal Map
+                            normalConverter = texSetGroup.nodes.new("ShaderNodeGroup")
+                            normalConverter.node_tree = bpy.data.node_groups[LoadNodeGroup("HZD Normal Map Converter")]
+                            normalConverter.location = offset_x - 200.0, texNode.location[1] if tiling else offset_y - 50 * len(images)
+                            normalConverter.hide = True
+                            normalConverter.inputs['Strength'].hide = True
+                            texSetGroup.links.new(texNode.outputs['Color'], normalConverter.inputs['Color'])
+                            texSetGroup.links.new(normalConverter.outputs['Normal'], texSetGroup_output.inputs['Normal'])
+                            texSetGroup.links.new(normalConverter.outputs['Normal Color'], texSetGroup_output.inputs['Normal Color'])
+                            if not setT.channelTypes[2].usageType == "Normal" and setT.channelTypes[2].usageType != "Invalid":
+                                # Blue channel
+                                sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
+                                if tiling:
+                                    normalConverter.location = offset_x - 200.0, texNode.location[1] + 20.0
+                                    sepRGBNode.location = offset_x - 200.0, texNode.location[1] - 20.0
+                                else:
+                                    sepRGBNode.location = offset_x - 200.0, texNode.location[1]
+                                sepRGBNode.label = "Separate B"
+                                sepRGBNode.hide = True
+                                sepRGBNode.outputs['R'].hide = True
+                                sepRGBNode.outputs['G'].hide = True
+                                if not texSetGroup.outputs.get(setT.channelTypes[2].usageType):
+                                    texSetGroup.outputs.new('NodeSocketFloat', setT.channelTypes[2].usageType)
+                                texSetGroup.links.new(texNode.outputs['Color'], sepRGBNode.inputs['Image'])
+                                texSetGroup.links.new(sepRGBNode.outputs['B'], texSetGroup_output.inputs[setT.channelTypes[2].usageType])
 
-                    else:
-                        texNode.location = texNode.location[0] - 400, texNode.location[1]  # move to the left
-                        sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
-                        sepRGBNode.location = texNode.location[0] + 400, texNode.location[1]
-                        for ic,cha in enumerate(setT.channelTypes[0:3]):
-                            if cha.usageType == "Invalid":
-                                pass
-                            elif cha.usageType == "Roughness":
-                                invert = texSetGroup.nodes.new("ShaderNodeInvert")
-                                invert.location = texNode.location[0] + 400, texNode.location[1] - 280
-                                texSetGroup.links.new(invert.inputs[1], sepRGBNode.outputs[ic])
-                                texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
-                                texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],sepRGBNode.outputs[ic])
+                        elif all(cha.usageType == setT.channelTypes[0].usageType for cha in setT.channelTypes[0:3]):
+                            # no need to break the color
+                            if setT.channelTypes[0].usageType == "Color":
+                                texNode.image.colorspace_settings.name = "Non-Color" if groupOutputs == DetailTextureOutputs else "sRGB"
+                            if setT.channelTypes[0].usageType == "Misc_01":
+                                # Separate Misc_01
+                                separateMisc = texSetGroup.nodes.new("ShaderNodeGroup")
+                                separateMisc.node_tree = bpy.data.node_groups[LoadNodeGroup("Separate Misc_01")]
+                                separateMisc.location = offset_x - 200.0, offset_y + 40.0
+                                separateMisc.hide = True
+                                texSetGroup.links.new(texNode.outputs['Color'], separateMisc.inputs['Color'])
+                                for out in separateMisc.outputs:
+                                  texSetGroup.links.new(separateMisc.outputs[out.name], texSetGroup_output.inputs[out.name])
                             else:
-                                # we gotta separate RGB
-                                texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
+                                outputType = UsageType_ValueMap[setT.channelTypes[0].usageType]
+                                if setT.channelTypes[0].usageType == "Mask" and groupOutputs == BaseTextureOutputs:
+                                    setT.channelTypes[0].usageType = "CID Mask"
+                                if not texSetGroup.outputs.get(setT.channelTypes[0].usageType):
+                                    texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
+                                texSetGroup.links.new(texNode.outputs['Color'], texSetGroup_output.inputs[setT.channelTypes[0].usageType])
 
-                                texSetGroup.links.new(sepRGBNode.inputs[0], texNode.outputs[0])
-                                texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],sepRGBNode.outputs[ic])
+                        else:
+                            sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
+                            sepRGBNode.location = offset_x - 200.0, texNode.location[1]
+                            sepRGBNode.label = "Separate "
+                            sepRGBNode.hide = True
+                            texSetGroup.links.new(texNode.outputs['Color'], sepRGBNode.inputs['Image'])
+                            for ic,cha in enumerate(setT.channelTypes[0:3]):
+                                sepRGBNode.outputs[ic].hide = True
+                                if cha.usageType == "Invalid":
+                                    pass
+                                else:
+                                    # we gotta separate RGB
+                                    if groupOutputs == BaseTextureOutputs and texDetailMapArray != None:
+                                        if cha.usageType == "Mask":
+                                            cha.usageType = "Array Mask"
+                                        if cha.usageType == "Mask_Alpha":
+                                            cha.usageType = "Detail Strength"
+                                    sepRGBNode.label += "RGB"[ic]
+                                    if not texSetGroup.outputs.get(cha.usageType):
+                                        texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
+                                    texSetGroup.links.new(sepRGBNode.outputs[ic], texSetGroup_output.inputs[cha.usageType])
 
+                        # ALPHA CHANNEL OUTPUT
+                        if setT.channelTypes[3].usageType in ("Invalid","Normal","Mask","Reflectance","Misc_01"):
+                            pass
+                        else:
+                            if setT.channelTypes[3].usageType == "Mask_Alpha" and groupOutputs == BaseTextureOutputs and texDetailMapArray != None:
+                                usageType = "Detail Strength"
+                            else:
+                                usageType = setT.channelTypes[3].usageType
+                            if not texSetGroup.outputs.get(usageType):
+                                texSetGroup.outputs.new("NodeSocketFloat", usageType)
+                            texSetGroup.links.new(texNode.outputs['Alpha'], texSetGroup_output.inputs[usageType])
 
+                        if any(cha.usageType == "Alpha" for cha in setT.channelTypes):
+                            mat.blend_method = "BLEND"
+                            print("enable Alpha Blend for Eevee")
 
-                    # ALPHA CHANNEL OUTPUT
-                    if setT.channelTypes[3].usageType in ("Invalid","Normal"):
-                        pass
-                    else:
-                        texSetGroup.outputs.new("NodeSocketFloat", setT.channelTypes[3].usageType)
-                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[1])
-
+                # Add texture set Node Group
                 shaderGroup = mat.node_tree.nodes.new("ShaderNodeGroup")
-                shaderGroup.node_tree = bpy.data.node_groups[texSetGroup.name]
-                shaderGroup.location = -400,-300*i+600
+                shaderGroup.parent = frameNodes[frameName]
+                shaderGroup.node_tree = bpy.data.node_groups[groupName]
+                shaderGroup.location = 0.0, frame_y[frameName]
+                shaderGroup.width = 200.0
+                shaderGroup.hide = (frameName != "models")
+                frame_y[frameName] -= 50.0 - 450.0*(frameName == "models")
 
-
+                # Link BaseTexture to BSDF
+                texSetGroup_output = shaderGroup.node_tree.nodes['Group Output']
+                for out in texSetGroup_output.inputs:
+                    if out.name and not out.is_linked:
+                        shaderGroup.outputs[out.name].hide = True
+                if groupOutputs == BaseTextureOutputs:
+                    for out in BaseTextureBSDFLinks:
+                        if texSetGroup_output.inputs[out].is_linked:
+                            mat.node_tree.links.new(shaderGroup.outputs[out], bsdfNode.inputs[out])
+                    if texSetGroup_output.inputs['Detail Strength'].is_linked:
+                        mat.node_tree.links.new(shaderGroup.outputs['Detail Strength'], combineTexNode.inputs['Fac'])
+                    mat.node_tree.links.new(shaderGroup.outputs['Roughness'], combineTexNode.inputs['Base Roughness'])
+                    mat.node_tree.links.new(shaderGroup.outputs['Normal Color'], combineTexNode.inputs['Base Normal'])
+                    mat.node_tree.links.new(shaderGroup.outputs['Color'], combineTexNode.inputs['Base Color'])
+                    if texSetGroup_output.inputs['Array Mask'].is_linked and texDetailMapArray != None:
+                        mat.node_tree.links.new(shaderGroup.outputs['Array Mask'], texDetailMapArray.inputs['Mask'])
+                    elif texSetGroup_output.inputs['CID Mask'].is_linked or texSetGroup_output.inputs['Skin Mask'].is_linked:
+                    # Add 'Combine Detail Textures' Node Group and connect with 'Combine Textures'
+                        combineDetailNode = mat.node_tree.nodes.new('ShaderNodeGroup')
+                        combineDetailNode.node_tree = bpy.data.node_groups[LoadNodeGroup('Combine Detail Textures')]
+                        combineDetailNode.width = 250.0
+                        combineDetailNode.location = -10.0, -250.0
+                        mat.node_tree.links.new(combineDetailNode.outputs['Normal Color'], combineTexNode.inputs['Detail Normal'])
+                        mat.node_tree.links.new(combineDetailNode.outputs['Detail Color'], combineTexNode.inputs['Detail Color'])
+                    if texSetGroup_output.inputs['CID Mask'].is_linked:
+                        mat.node_tree.links.new(shaderGroup.outputs['CID Mask'], combineDetailNode.inputs['CID Mask'])
+                    if texSetGroup_output.inputs['Skin Mask'].is_linked:
+                        mat.node_tree.links.new(shaderGroup.outputs['Color'], bsdfNode.inputs['Subsurface Color'])
+                        mat.node_tree.links.new(shaderGroup.outputs['Skin Mask'], combineDetailNode.inputs['Skin Mask'])
 
             else:
                 for ii, image in enumerate(images):
-                    texNode = mat.node_tree.nodes.new('ShaderNodeTexImage')
-                    texNode.name = t
-                    imageName = t.split('/')
-                    texNode.label = imageName[len(imageName)-1]
-                    texNode.location = -400*ii-400,-300*i+600
-                    bpy.data.images.load(str(image))
-                    texNode.image = bpy.data.images[image.name]
+                    texName = t.split('/')
+                    texName = texName[len(texName)-1]
+                    texHash = hashlib.sha224(t.encode("utf8")).hexdigest()[:10]
+                    print(frameName, texName, texHash)
+                    #pdb.set_trace()
+                    if texAsset.textures[0].type == Texture.TextureType['_2DARRAY']:
+                        texDetailMapArray = mat.node_tree.nodes.new("ShaderNodeGroup")
+                        if bpy.data.node_groups.find(texName) == -1:
+                            texDetailMapArray.node_tree = bpy.data.node_groups[LoadNodeGroup("_DetailMapArrayTemplate")]
+                            texDetailMapArray.node_tree.name = texName
+                        else:
+                            texDetailMapArray.node_tree = bpy.data.node_groups[texName]
+                        texDetailMapArray.width = 250.0
+                        texDetailMapArray.location = -10.0, -250.0
+                        #texDetailMapArray.parent = frameNodes[frameName]
+                        #texDetailMapArray.location = 0.0, frame_y[frameName]
+                        #texDetailMapArray.hide = True
+                        texNode = texDetailMapArray.node_tree.nodes['Image Texture']
+                        mat.node_tree.links.new(texDetailMapArray.outputs['Roughness'], combineTexNode.inputs['Detail Roughness'])
+                        mat.node_tree.links.new(texDetailMapArray.outputs['Normal Color'], combineTexNode.inputs['Detail Normal'])
+                        mat.node_tree.links.new(texDetailMapArray.outputs['Color'], combineTexNode.inputs['Detail Color'])
+                    else:
+                        # Create Image Node
+                        texNode = mat.node_tree.nodes.new('ShaderNodeTexImage')
+                        texNode.parent = frameNodes[frameName]
+                        texNode.location = 0.0, frame_y[frameName]
+                        frame_y[frameName] -= 50.0
+
+                    texNode.image = bpy.data.images.get(image.name, None)
+                    # Load image if not yet exists
+                    if texNode.image is None:
+                        texNode.image = bpy.data.images.load(str(image))
+                    texNode.image.colorspace_settings.name = "Non-Color"
+                    texNode.hide = True
 
     else:
         say("Material already exists")
-        mat = bpy.data.materials[matblock.shaderName+"___"+meshName]
+        mat = bpy.data.materials[materialName]
         obj.data.materials.append(mat)
 
 def CreateSkeleton():
