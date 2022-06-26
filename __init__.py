@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Union, Dict
 from enum import IntEnum
 import subprocess
+# python debuger
+import pdb
 
 class DXGI(IntEnum):
     DXGI_FORMAT_UNKNOWN = 0,
@@ -161,9 +163,6 @@ verbose = True
 def say(string,level=0):
     if verbose:
         print(str(string))
-
-def dbg_interact():
-    __import__('code').interact(local=dict(globals(), **locals()))
 
 # Path to "NVIDIA Texture Tools Exporter" for converting DDS to PNG
 NVTTDefaultPath = Path('C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvtt_export.exe')
@@ -1009,6 +1008,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
     core = HZDEditor.HZDAbsPath
     stream = core+".stream"
 
+    bpy.ops.wm.console_toggle()
 
     # CREATE COLLECTION TREE #####################
     lodCollection = bpy.context.scene.collection
@@ -1305,6 +1305,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
         else:
             matblock = asset.MultiMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
         CreateMaterial(obj,matblock,meshName)
+    bpy.ops.wm.console_toggle()
 
 def ExtractAsset(assetPath):
 
