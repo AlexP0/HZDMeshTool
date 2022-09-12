@@ -2,25 +2,12 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 3, 2),
-    "blender": (3, 1, 0),
+    "version": (1, 4, 0),
+    "blender": (3, 2, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
     }
 
-
-# def install_Package():
-#     import subprocess
-#     import sys
-#     import os
-#
-#     python_exe = os.path.join(sys.prefix, 'bin', 'python.exe')
-#
-#     subprocess.call([python_exe, "-m", "ensurepip"])
-#     subprocess.call([python_exe, "-m", "pip", "install", "--upgrade", "pip"])
-#
-#     subprocess.call([python_exe, "-m", "pip", "install", "mmh3"])
-# install_Package()
 
 import bpy
 import bmesh
@@ -29,9 +16,11 @@ import pathlib
 from struct import unpack, pack
 import numpy as np
 import mathutils
+import math
 import operator
-# import mmh3
-#from . \
+
+#uncomment this when publishing
+# from .
 import pymmh3
 
 import ctypes
@@ -40,6 +29,7 @@ from pathlib import Path
 from typing import Union, Dict
 from enum import IntEnum
 
+# comment this when publishing
 if "bpy" in locals():
     import imp
     imp.reload(pymmh3)
@@ -169,11 +159,11 @@ class DXGI(IntEnum):
     DXGI_FORMAT_V408 = 132,
     DXGI_FORMAT_FORCE_UINT = 0xffffffff
 
-BoneMatrices = {}
+BoneMatrices = {} #TODO this BoneMatrices is very weird.
 
 verbose = True
 
-def say(string):
+def say(string,level=0):
     if verbose:
         print(str(string))
 
@@ -192,9 +182,9 @@ class ArchiveManager:
             r = ByteReader
             self.version = r.int32(f)
             self.key = r.int32(f)
-            self.filesize = r.int64(f)
-            self.datasize = r.int64(f)
-            self.filecount = r.int64(f)
+            self.filesize = r.uint64(f)
+            self.datasize = r.uint64(f)
+            self.filecount = r.uint64(f)
             self.chunkcount = r.int32(f)
             self.maxchunksize = r.int32(f)
 
@@ -218,12 +208,12 @@ class ArchiveManager:
 
         def parse(self, f):
             r = ByteReader
-            self.id = r.int32(f)
-            self.key0 = r.int32(f)
-            self.hash = r.int64(f)
-            self.offset = r.int64(f)
-            self.size = r.int32(f)
-            self.key1 = r.int32(f)
+            self.id = r.uint32(f)
+            self.key0 = r.uint32(f)
+            self.hash = r.uint64(f)
+            self.offset = r.uint64(f)
+            self.size = r.uint32(f)
+            self.key1 = r.uint32(f)
 
         def print(self):
             print("File", "\n",
@@ -244,20 +234,20 @@ class ArchiveManager:
 
         def parse(self, f):
             r = ByteReader
-            self.uncompressed_offset = r.int64(f)
-            self.uncompressed_size = r.int32(f)
+            self.uncompressed_offset = r.uint64(f)
+            self.uncompressed_size = r.uint32(f)
             self.key0 = r.int32(f)
-            self.compressed_offset = r.int64(f)
-            self.compressed_size = r.int32(f)
-            self.key1 = r.int32(f)
+            self.compressed_offset = r.uint64(f)
+            self.compressed_size = r.uint32(f)
+            self.key1 = r.uint32(f)
 
         def write(self, f):
             w = BytePacker
             bChunkEntry = b''
-            bChunkEntry += w.int64(self.uncompressed_offset)
+            bChunkEntry += w.uint64(self.uncompressed_offset)
             bChunkEntry += w.int32(self.uncompressed_size)
             bChunkEntry += w.int32(self.key0)
-            bChunkEntry += w.int64(self.compressed_offset)
+            bChunkEntry += w.uint64(self.compressed_offset)
             bChunkEntry += w.int32(self.compressed_size)
             bChunkEntry += w.int32(self.key1)
             f.write(bChunkEntry)
@@ -282,9 +272,9 @@ class ArchiveManager:
         tmp = string.encode("utf8") + b'\x00'
         fileHash = pymmh3.hash64(tmp, 42, True)[0]
         # print(hex(fileHash), fileHash)
-        # bHash = BytePacker.int64(fileHash)
+        # bHash = BytePacker.uint64(fileHash)
         # print(bHash)
-        # say("mmh3 = "+hex(fileHash)+" ("+string+")")
+        say("mmh3 = "+hex(fileHash)+" ("+string+")")
         return fileHash
 
     def FindChunkContainingOffset(self,Uoffset):
@@ -300,50 +290,61 @@ class ArchiveManager:
         RealEndOffset = RealStartOffset + file.size
         # print(file.offset,Chunks[StartChunkIndex].uncompressed_offset,RealStartOffset,RealEndOffset)
         return RealStartOffset, RealEndOffset
-
+    def GetExtractedFilePath(self,filePath,isStream=False):
+        HZDEditor = bpy.context.scene.HZDEditor
+        if filePath[-5:] == ".core" or filePath[-12:] == ".core.stream":
+            ExtractedFilePath = HZDEditor.WorkAbsPath + filePath
+        else:
+            if isStream:
+                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core.stream"
+            else:
+                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+        return ExtractedFilePath
     def ExtractFile(self,file,filePath, isStream = False):
+        class Oodle:
+            HZDEditor = bpy.context.scene.HZDEditor
+
+            # _local_path = Path(__file__).absolute().parent
+            _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
+            # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
+            _compress = _lib.OodleLZ_Compress
+            _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
+                                  c_size_t,
+                                  c_size_t]
+            _compress.restype = c_int32
+            _decompress = _lib.OodleLZ_Decompress
+            _decompress.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_int32, c_int32, c_int32, c_size_t,
+                                    c_size_t,
+                                    c_size_t, c_size_t, c_size_t, c_size_t, c_int32]
+            _decompress.restype = c_int32
+
+            @staticmethod
+            def decompress(input_buffer: Union[bytes, bytearray], output_size):
+                out_data_p = ctypes.create_string_buffer(output_size)
+                in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
+                result = Oodle._decompress(in_data_p, len(input_buffer), out_data_p, output_size, 0, 0,
+                                           0, 0, 0, 0, 0, 0, 0, 0)
+                assert result >= 0, 'Error decompressing chunk'
+                return bytes(out_data_p)
+
+            @staticmethod
+            def compress(input_buffer: Union[bytes, bytearray], fmt: int = 8, level: int = 4):
+                def calculate_compression_bound(size):
+                    return size + 274 * ((size + 0x3FFFF) // 0x40000)
+
+                out_size = calculate_compression_bound(len(input_buffer))
+                out_data_p = ctypes.create_string_buffer(out_size)
+                in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
+
+                result = Oodle._compress(fmt, in_data_p, len(input_buffer), out_data_p, level, 0, 0, 0, 0, 0)
+                assert result >= 0, 'Error compressing chunk'
+                return bytes(out_data_p[:result])
         if os.path.exists(bpy.context.scene.HZDEditor.GameAbsPath):
             say("Game Path is Valid")
             ## I do not know who the original author of this Oodle class is
             ## I got it from here https://github.com/REDxEYE/ProjectDecima_python/tree/master/ProjectDecima/utils
-            class Oodle:
-                HZDEditor = bpy.context.scene.HZDEditor
-            
-                # _local_path = Path(__file__).absolute().parent
-                _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
-                # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
-                _compress = _lib.OodleLZ_Compress
-                _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
-                                      c_size_t,
-                                      c_size_t]
-                _compress.restype = c_int32
-                _decompress = _lib.OodleLZ_Decompress
-                _decompress.argtypes = [c_char_p, c_size_t, c_char_p, c_size_t, c_int32, c_int32, c_int32, c_size_t,
-                                        c_size_t,
-                                        c_size_t, c_size_t, c_size_t, c_size_t, c_int32]
-                _decompress.restype = c_int32
-            
-                @staticmethod
-                def decompress(input_buffer: Union[bytes, bytearray], output_size):
-                    out_data_p = ctypes.create_string_buffer(output_size)
-                    in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
-                    result = Oodle._decompress(in_data_p, len(input_buffer), out_data_p, output_size, 0, 0,
-                                               0, 0, 0, 0, 0, 0, 0, 0)
-                    assert result >= 0, 'Error decompressing chunk'
-                    return bytes(out_data_p)
-            
-                @staticmethod
-                def compress(input_buffer: Union[bytes, bytearray], fmt: int = 8, level: int = 4):
-                    def calculate_compression_bound(size):
-                        return size + 274 * ((size + 0x3FFFF) // 0x40000)
-            
-                    out_size = calculate_compression_bound(len(input_buffer))
-                    out_data_p = ctypes.create_string_buffer(out_size)
-                    in_data_p = ctypes.create_string_buffer(bytes(input_buffer))
-            
-                    result = Oodle._compress(fmt, in_data_p, len(input_buffer), out_data_p, level, 0, 0, 0, 0, 0)
-                    assert result >= 0, 'Error compressing chunk'
-                    return bytes(out_data_p[:result])
+        else:
+            raise Exception("Game Path is invalid")
         oodle = Oodle()
         HZDEditor = bpy.context.scene.HZDEditor
 
@@ -379,8 +380,6 @@ class ArchiveManager:
                 w.write(DataChunks[Start:End])
                 say("Created File: "+ ExtractedFilePath)
             return ExtractedFilePath
-
-
     def FindFile(self,filePath):
 
 
@@ -388,8 +387,9 @@ class ArchiveManager:
 
         # DesiredHash = b'\x0A\x4C\xD6\x5C\xF6\x5A\xFF\x2F' #Prefetch
         DesiredHash = self.get_file_hash(filePath)
-        for binArchive in ['Initial.bin','Remainder.bin','DLC1.bin']:
-            # say("Searching for "+filePath+" in "+binArchive)
+        say(str(DesiredHash))
+        for binArchive in ['Patch.bin','Remainder.bin','DLC1.bin','Initial.bin']:
+            say("Searching for "+filePath+" in "+binArchive)
             with open(HZDEditor.GamePath + "Packed_DX12\\" + binArchive, 'rb') as f:
                 H = self.BinHeader()
                 self.Chunks.clear()
@@ -403,8 +403,9 @@ class ArchiveManager:
                     file = self.FileEntry()
                     file.parse(f)
                     # Files.append(file)
+                    # print(file.hash,DesiredHash)
                     if file.hash == DesiredHash:
-                        # file.print()
+                        file.print()
                         foundFile = True
                         DesiredFile = file
                 if foundFile:
@@ -420,14 +421,24 @@ class ArchiveManager:
             raise Exception("Could not find file in bin archive.",filePath,DesiredHash)
         else:
             return DesiredFile
+    def isFileInWorkspace(self,filePath,isStream):
+        return os.path.exists(self.GetExtractedFilePath(filePath,isStream))
 
+    def FindAndExtract(self,filePath,isStream = False):
+        if self.isFileInWorkspace(filePath,isStream):
+            assetFile = self.FindFile(filePath)
+            ExtractedFilePath = self.ExtractFile(assetFile,filePath,isStream)
+        else:
+            ExtractedFilePath = self.GetExtractedFilePath(filePath,isStream)
+            print("File Already Extracted: ",ExtractedFilePath)
+        return ExtractedFilePath
 def ClearProperties(self,context):
     HZDEditor = bpy.context.scene.HZDEditor
     HZDEditor.HZDAbsPath = bpy.path.abspath(HZDEditor.HZDPath)
     HZDEditor.GameAbsPath = bpy.path.abspath(HZDEditor.GamePath)
     HZDEditor.WorkAbsPath = bpy.path.abspath(HZDEditor.WorkPath)
     HZDEditor.SkeletonAbsPath = bpy.path.abspath(HZDEditor.SkeletonPath)
-    HZDEditor.SkeletonName = "Unknown Skeleton: Import Skeleton to set."
+    # HZDEditor.SkeletonName = "Unknown Skeleton: Import Skeleton to set."
     BoneMatrices.clear()
     return None
 class ByteReader:
@@ -454,13 +465,11 @@ class ByteReader:
     @staticmethod
     def int16(f):
         return unpack('<h', f.read(2))[0]
-
     @staticmethod
     def uint16(f):
         b = f.read(2)
         i = unpack('<H', b)[0]
         return i
-
     @staticmethod
     def float16(f):
         b = f.read(2)
@@ -471,7 +480,7 @@ class ByteReader:
         b = f.read(8)
         return b
     @staticmethod
-    def uuid(f):
+    def guid(f):
         return f.read(16)
     @staticmethod
     def int32(f):
@@ -484,16 +493,23 @@ class ByteReader:
         i = unpack('<I',b)[0]
         return i
     @staticmethod
-    def int64(f):
+    def uint64(f):
         b = f.read(8)
         i = unpack('<Q',b)[0]
+        return i
+    @staticmethod
+    def int64(f):
+        b = f.read(8)
+        i = unpack('<q', b)[0]
         return i
     @staticmethod
     def string(f,length):
         b = f.read(length)
         return "".join(chr(x) for x in b)
     @staticmethod
-    def path(f, length):
+    def path(f):
+        b = f.read(4)
+        length = unpack('<i', b)[0]
         b = f.read(length)
         return "".join(chr(x) for x in b)
     @staticmethod
@@ -508,43 +524,207 @@ class ByteReader:
         b = f.read(4)
         fl = unpack('<f',b)[0]
         return fl
+    @staticmethod
+    def vector3(f):
+        b = f.read(12)
+        return unpack('<fff', b)
+    @staticmethod
+    def dvector3(f):
+        #double vector 3
+        b = f.read(24)
+        return unpack('<ddd', b)
+    @staticmethod
+    def vector4(f):
+        b = f.read(16)
+        return unpack('<ffff', b)
+    @staticmethod
+    def int16Norm(f):
+        i = unpack('<H', f.read(2))[0]
+        v = i ^ 2**15
+        v -= 2**15
+        v /= 2**15 - 1
+        return v
+    @staticmethod
+    def uint16Norm(f):
+        int16 = unpack('<H', f.read(2))[0]
+        return int16 / 2 ** 16
+    @staticmethod
+    def uint8Norm(f):
+        int16 = unpack('<B', f.read(1))[0]
+        maxint = 2 ** 8
+        return int16 / maxint
+    @staticmethod
+    def X10Y10Z10W2Normalized(f):
+        i = unpack('<I', f.read(4))[0]  # get 32bits of data
+
+        x = i >> 0
+        x = ((x & 0x3FF) ^ 512) - 512
+
+        y = i >> 10
+        y = ((y & 0x3FF) ^ 512) - 512
+
+        z = i >> 20
+        z = ((z & 0x3FF) ^ 512) - 512
+
+        w = i >> 30
+        w = w & 0x1
+
+        vectorLength = math.sqrt(x ** 2 + y ** 2 + z ** 2)
+        # # print(x,y,z)
+        if vectorLength != 0:
+            x /= vectorLength
+            y /= vectorLength
+            z /= vectorLength
+        return [x, y, z, w]
+    @staticmethod
+    def readVertexStorageType(f,storageType):
+        ST = StreamData.VertexElementDesc.StorageType
+        r = ByteReader
+        if storageType == ST.Undefined:
+            raise Exception("Undefined Storage Type at offset %d"%f.tell())
+        if storageType == ST.SignedShortNormalized:
+            return r.int16Norm(f)
+        if storageType == ST.Float:
+            return r.float(f)
+        if storageType == ST.HalfFloat:
+            return r.float16(f)
+        if storageType == ST.UnsignedByteNormalized:
+            return r.uint8Norm(f)
+        if storageType == ST.SignedShort:
+            return r.int8(f)
+        if storageType == ST.X10Y10Z10W2Normalized:
+            return r.X10Y10Z10W2Normalized(f)
+        if storageType == ST.UnsignedByte:
+            return r.uint8(f)
+        if storageType == ST.UnsignedShort:
+            return r.uint16(f)
+        if storageType == ST.UnsignedShortNormalized:
+            return r.uint16Norm(f)
+        if storageType == ST.UNorm8sRGB:
+            raise Exception("Storage Type not handled at offset %d" % f.tell())
+        if storageType == ST.X10Y10Z10W2UNorm:
+            raise Exception("Storage Type not handled at offset %d" % f.tell())
+
 class BytePacker:
     @staticmethod
     def int8(v):
         return pack('<b', v)
-
     @staticmethod
     def uint8(v):
         return pack('<B', v)
-
+    @staticmethod
+    def uint8Norm(v):
+        if 0.0 <= v <= 1.0:
+            i = int(v * (2 ** 8))
+        else:
+            raise Exception("Couldn't normalize value as uint16Norm, "
+                            "it wasn't between -1.0 and 1.0. Unknown max value."
+                            +str(v))
+        return pack('<B', i)
     @staticmethod
     def int16(v):
         return pack('<h', v)
     @staticmethod
     def uint16(v):
         return pack('<H', v)
-
+    @staticmethod
+    def int16Norm(v):
+        if -1.0 < v < 1.0:
+            if v >= 0:
+                v = int(abs(v) * (2 ** 15))
+            else:
+                v = 2 ** 16 - int(abs(v) * (2 ** 15))
+        else:
+            raise Exception("Couldn't normalize value as int16Norm, it wasn't between -1.0 and 1.0. Unknown max value.")
+        return pack('<H', v)
+    @staticmethod
+    def uint16Norm(v):
+        if 0.0 < v < 1.0:
+            i = v * (2 ** 16) - 1
+        else:
+            raise Exception("Couldn't normalize value as uint16Norm, it wasn't between -1.0 and 1.0. Unknown max value.")
+        return pack('<H', i)
     @staticmethod
     def float16(v):
         f32 = np.float32(v)
         f16 = f32.astype(np.float16)
         b16 = f16.tobytes()
         return b16
-
     @staticmethod
     def int32(v):
         return pack('<i', v)
     @staticmethod
     def uint32(v):
         return pack('<I', v)
-
+    @staticmethod
+    def uint64(v):
+        return pack('<Q', v)
     @staticmethod
     def int64(v):
-        return pack('<Q', v)
-
+        return pack('<q', v)
     @staticmethod
     def float(v):
         return pack('<f', v)
+    @staticmethod
+    def X10Y10Z10W2(x,y,z,w):
+        if x >= 0:
+            x = int(abs(x) * 2 ** 9)
+        else:
+            x = 2**10 - int(abs(x) * 2 ** 9)
+        if y >= 0:
+            y = int(abs(y) * 2 ** 9)
+        else:
+            y = 2**10 - int(abs(y) * 2 ** 9)
+        if z >= 0:
+            z = int(abs(z) * 2 ** 9)
+        else:
+            z = 2**10 - int(abs(z) * 2 ** 9)
+
+
+        w = int(w)
+
+
+        x = (abs(x) & 0x3FF)
+        y = (abs(y) & 0x3FF) << 10
+        z = (abs(z) & 0x3FF) << 20
+        w = (abs(w) & 0x3) << 30
+
+        v = x | y | z | w
+        return pack("<I", v)
+
+    @staticmethod
+    def packVertexStorageType(value,storageType):
+        ST = StreamData.VertexElementDesc.StorageType
+        r = BytePacker
+        if storageType == ST.Undefined:
+            raise Exception("Undefined Storage Type")
+        if storageType == ST.SignedShortNormalized:
+            return r.int16Norm(value)
+        if storageType == ST.Float:
+            return r.float(value)
+        if storageType == ST.HalfFloat:
+            return r.float16(value)
+        if storageType == ST.UnsignedByteNormalized:
+            return r.uint8Norm(value)
+        if storageType == ST.SignedShort:
+            return r.int8(value)
+        if storageType == ST.X10Y10Z10W2Normalized:
+            if len(value) == 3:
+                return r.X10Y10Z10W2(value[0], value[1], value[2], 1.0)
+            elif len(value) == 4:
+                return r.X10Y10Z10W2(value[0],value[1],value[2],value[3])
+            else:
+                raise Exception("Unexpected value in X10Y10Z10W2 packing.")
+        if storageType == ST.UnsignedByte:
+            return r.uint8(value)
+        if storageType == ST.UnsignedShort:
+            return r.uint16(value)
+        if storageType == ST.UnsignedShortNormalized:
+            return r.uint16Norm(value)
+        if storageType == ST.UNorm8sRGB:
+            raise Exception("Storage Type not handled")
+        if storageType == ST.X10Y10Z10W2UNorm:
+            raise Exception("Storage Type not handled")
 
 def FillChunk(f):
     offset = f.tell()
@@ -562,7 +742,7 @@ def CopyFile(read,write,offset,size,buffersize=500000):
     write.write(read.read(size%buffersize))
 
 def Parse4x4Matrix(f):
-    r = ByteReader()
+    r = ByteReader
     row1 = []
     row2 = []
     row3 = []
@@ -592,106 +772,6 @@ def Parse4x4Matrix(f):
     # print(mathutils.Matrix((row1,row2,row3,row4)))
     matrix = mathutils.Matrix((row1,row2,row3,row4)).inverted()
     return matrix
-def ParseVertex(f,stride,half=False,boneCount=0):
-    r = ByteReader()
-    startOffset = f.tell()
-    endOffset = startOffset+stride
-
-    #Positions
-    if half:
-        coLength = 8
-        x = r.float16(f)
-        y = r.float16(f)
-        z = r.float16(f)
-        f.seek(2,1)
-    else:
-        coLength = 12
-        x = r.float(f)
-        y = r.float(f)
-        z = r.float(f)
-    #Bone Indices
-    boneIndices = []
-    noWeight = False
-    if boneCount >= 256:
-        bic = (stride - coLength)/3
-        if bic - int(bic) != 0:
-            if stride == 32:
-                bic = 8
-            else:
-                bic = (stride - coLength)/2
-                noWeight = True
-        bint16 = True
-    else:
-        bic = (stride - coLength)/2 #bone indices count
-        bint16 = False
-    lastbi =-1
-    for i in range(int(bic)):
-        if bint16:
-            bi = r.uint16(f)
-        else:
-            bi = r.uint8(f)
-        if bi == lastbi:
-            pass
-        else:
-            boneIndices.append(bi)
-        lastbi = bi
-
-    #Vertex Weights
-    boneWeights = []
-    for i,b in enumerate(boneIndices):
-        if noWeight:
-            boneWeights.append(1.0)
-        else:
-            bw = r.uint8(f)
-            if bw == 0:
-                    vw = 1 - sum(boneWeights)
-            else:
-                vw = bw / 255
-                # vw = vw*(-1)+1
-            boneWeights.append(vw)
-    if not noWeight:
-        f.seek(endOffset)
-    return (x,y,z),boneIndices,boneWeights
-def ParseNormals(f):
-    r = ByteReader()
-    # Normal Vector
-    nx = r.float(f)
-    ny = r.float(f)
-    nz = r.float(f)
-    # Tangent Vector
-    tx = r.float(f)
-    ty = r.float(f)
-    tz = r.float(f)
-    # Flip
-    flip = r.float(f)
-    return (nx,ny,nz), [tx,ty,tz], flip
-def ParseColor(f):
-    r = ByteReader()
-    rc = r.uint8(f)/255
-    gc = r.uint8(f)/255
-    bc = r.uint8(f)/255
-    ac = r.uint8(f)/255
-    return (rc,gc,bc,ac)
-def ParseUV(f):
-    r = ByteReader()
-    u = r.float16(f)
-    v = r.float16(f)
-    # u = r.int16(f)
-    # v = r.int16(f)
-    # u2 = r.float16(f)
-    # v2 = r.float16(f)
-    # u3 = r.float16(f)
-    # v3 = r.float16(f)
-    # u = u/65536
-    # v = v/65536
-    return (u,v)
-def ParseFaces(f):
-    r = ByteReader()
-    v1 = r.uint16(f)
-    v2 = r.uint16(f)
-    v3 = r.uint16(f)
-    face = (v1,v2,v3)
-    return face
 
 class HZDSettings(bpy.types.PropertyGroup):
     AssetPath: bpy.props.StringProperty(name="Asset Path", subtype='FILE_PATH', update=ClearProperties,
@@ -709,7 +789,11 @@ class HZDSettings(bpy.types.PropertyGroup):
     SkeletonPath: bpy.props.StringProperty(name="Skeleton Core",subtype='FILE_PATH', update=ClearProperties,
                                            description="Path to the skeleton .core file")
     SkeletonAbsPath : bpy.props.StringProperty()
-    SkeletonName: bpy.props.StringProperty(name="Skeleton Name")
+    SkeletonName: bpy.props.StringProperty(name="Skeleton Name") #DEPRECATED
+
+    ModelHelpersPath : bpy.props.StringProperty(name="Model Helpers",subtype='FILE_PATH', update=ClearProperties,
+                                           description="Path to the robot_modelhelpers.core file. If not set the tool will try to extract it for you.\n"
+                                                       "This is used for placing detachable parts on the robot skeleton.")
 
     LodDistance0: bpy.props.FloatProperty(name="Lod Distance 0")
     LodDistance1: bpy.props.FloatProperty(name="Lod Distance 1")
@@ -729,210 +813,401 @@ class HZDSettings(bpy.types.PropertyGroup):
     LodDistance15: bpy.props.FloatProperty(name="Lod Distance 15")
     ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False,description="Toggle the extraction of textures. When importing a mesh, texture will be detected and extracted to the Workspace directory.")
 
-
-def ImportMesh(isGroup,Index,LODIndex,BlockIndex):
-    r = ByteReader()
-    # print(isGroup,Index,LODIndex,BlockIndex)
-    if isGroup:
-        md = asset.LODGroups[Index].LODList[LODIndex].meshBlockList[BlockIndex]
-        meshName = asset.LODGroups[Index].LODList[LODIndex].meshNameBlock.name
+def ParsePosition(f,storageType):
+    r = ByteReader
+    x = float(r.readVertexStorageType(f,storageType))
+    y = float(r.readVertexStorageType(f, storageType))
+    z = float(r.readVertexStorageType(f, storageType))
+    return [x,y,z]
+def ParseTris(f,is32bit=False):
+    r = ByteReader
+    if is32bit:
+        return [r.uint32(f),r.uint32(f),r.uint32(f)]
     else:
-        md = asset.LODObjects[Index].LODList[LODIndex].meshBlockList[BlockIndex]
-        meshName = asset.LODObjects[Index].LODList[LODIndex].meshNameBlock.name
+        return [r.uint16(f),r.uint16(f),r.uint16(f)]
+def ParseNormal(f,storageType):
+    r = ByteReader
+    if storageType == StreamData.VertexElementDesc.StorageType.X10Y10Z10W2Normalized:
+        return r.readVertexStorageType(f,storageType)[0:3]
+    x = float(r.readVertexStorageType(f,storageType))
+    y = float(r.readVertexStorageType(f, storageType))
+    z = float(r.readVertexStorageType(f, storageType))
+    return [x,y,z]
+def ParseUVChannel(f,storageType):
+    r = ByteReader
+    u = float(r.readVertexStorageType(f,storageType))
+    v = float(r.readVertexStorageType(f,storageType))
+    return [u,v]
+def ParseBoneWeights(f,vindex,streamData):
+    r = ByteReader
+    vs:StreamData = streamData
+    et = StreamData.VertexElementDesc.ElementType
+    boneIndices = []
+    boneWeights = []
+    indiceWeight = {}
+    for ei in vs.elementInfo:
+        if ei.elementType in (et.BlendIndices,et.BlendIndices2):
+            f.seek(vs.streamAbsOffset + vindex * vs.stride + ei.offset)
+            for i in range(ei.count):
+                boneIndices.append(r.readVertexStorageType(f,ei.storageType))
+        if ei.elementType in (et.BlendWeights,et.BlendWeights2):
+            f.seek(vs.streamAbsOffset + vindex * vs.stride + ei.offset)
+            for i in range(ei.count):
+                boneWeights.append(float(r.readVertexStorageType(f,ei.storageType)))
+    if len(boneWeights) == 0: #happens when mesh is fully weight to a bone
+        boneWeights = [1.0] * len(boneIndices)
+    if len(boneIndices) != len(boneWeights):
+        #Add 0.0 to match lenghts. In case there's more bone indices than weights.
+        boneWeights.extend([0.0]*(len(boneIndices)-len(boneWeights)))
+    #bones with 0.0 weight use the remaining weight
+    remainderWeight = 1.0 - sum(boneWeights)
+    #For some reason, the bone weghts are all offset by 1, the remainder goes to the first bone index.
+    if remainderWeight > 0:
+        boneWeights.insert(0,remainderWeight)
+
+    for i,bi in enumerate(boneIndices):
+        if boneWeights[i] != 0:
+            indiceWeight[bi] = boneWeights[i]
+    return indiceWeight
+def ParseVertexColor(f,storageType):
+    r = ByteReader
+    red = float(r.readVertexStorageType(f,storageType))
+    green = float(r.readVertexStorageType(f, storageType))
+    blue = float(r.readVertexStorageType(f, storageType))
+    alpha = float(r.readVertexStorageType(f, storageType))
+    return [red,green,blue,alpha]
+
+def findHelperInFile(filePath, objectName):
+    with open(filePath, 'rb') as h:
+        r = ByteReader
+        DataBlock(h, expectedID=BlockIDs["SkeletonHelpers"])
+        r.hashtext(h)
+        helperCount = r.uint32(h)
+        for i in range(helperCount):
+            matrix = Parse4x4Matrix(h)
+            name = r.hashtext(h)
+            parentIndex = r.uint32(h)
+            if name[:-7] == objectName: #remove "_helper"
+                return parentIndex, matrix
+        return None, None
+
+def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
+    r = ByteReader
+    # print(isLodMesh,Index,LODIndex,BlockIndex)
+    if isLodMesh:
+        prim = asset.LodMeshResources[resIndex].meshList[meshIndex].primitives[primIndex]
+        meshName = asset.LodMeshResources[resIndex].meshList[meshIndex].meshName
+        meshType = asset.LodMeshResources[resIndex].meshBase.drawableCullInfo.meshType
+        assetName = asset.LodMeshResources[resIndex].objectName
+    else:
+        prim = asset.MultiMeshResources[resIndex].meshList[meshIndex].primitives[primIndex]
+        meshName = asset.MultiMeshResources[resIndex].meshList[meshIndex].meshName
+        meshType = asset.MultiMeshResources[resIndex].meshBase.drawableCullInfo.meshType
+        assetName = asset.MultiMeshResources[resIndex].objectName
+    say("\nImporting : " + str(primIndex) + "_" + meshName)
+    say(prim)
+
+    if not prim.vertexBlock.inStream:
+        print("Cannot import mesh from .core")
+        return
+
+
     HZDEditor = bpy.context.scene.HZDEditor
     core = HZDEditor.HZDAbsPath
     stream = core+".stream"
-    coresize = os.path.getsize(core)
 
-    say("\nImporting : "+str(BlockIndex)+"_"+meshName)
 
     # CREATE COLLECTION TREE #####################
-    if bpy.context.scene.collection.children.find(meshName[:-1]) >= 0:
-        assetCollection = bpy.context.scene.collection.children[meshName[:-1]]
-    else:
-        assetCollection = bpy.context.blend_data.collections.new(name=meshName[:-1])
-        bpy.context.scene.collection.children.link(assetCollection)
-
-    if assetCollection.children.find("LOD " + meshName[-1:].capitalize()) >= 0:
-        lodCollection = assetCollection.children["LOD " + meshName[-1:].capitalize()]
-    else:
-        lodCollection = bpy.context.blend_data.collections.new(name="LOD " + meshName[-1:].capitalize())
-        assetCollection.children.link(lodCollection)
-
-    # Attach to Armature #####################
-    armature = None
-    for o in assetCollection.objects:
-        if type(o.data) == bpy.types.Armature:
-            if o.data.name[0:20] == str(ArchiveManager.get_file_hash(asset.LODGroups[0].LODList[0].meshNameBlock.skeletonPath)):
-                armature = o
-    if armature is None:
-        armature = CreateSkeleton()
-
-
-    boneCount = len(armature.data.bones)
-
-    with open(stream,'rb') as f:
-        #VERTICES
-        vList = [] #Vertices
-        biList = [] #Bone Indices
-        bwList = [] #Bone Weights
-        vb = md.vertexBlock
+    lodCollection = bpy.context.scene.collection
+    # if bpy.context.scene.collection.children.find(assetName) >= 0:
+    #     assetCollection = bpy.context.scene.collection.children[assetName]
+    # else:
+    #     assetCollection = bpy.context.blend_data.collections.new(name=assetName)
+    #     bpy.context.scene.collection.children.link(assetCollection)
+    # if isLodMesh:
+    #     # LOD Collection
+    #     if assetCollection.children.find("LOD " + str(meshIndex)) >= 0:
+    #         lodCollection = assetCollection.children["LOD " + str(meshIndex)]
+    #     else:
+    #         lodCollection = bpy.context.blend_data.collections.new(name="LOD " + str(meshIndex))
+    #         assetCollection.children.link(lodCollection)
+    # else:
+    #     # MultiMesh Collection
+    #     if assetCollection.children.find("Multi Mesh") >= 0:
+    #         lodCollection = assetCollection.children["Multi Mesh"]
+    #     else:
+    #         lodCollection = bpy.context.blend_data.collections.new(name="Multi Mesh")
+    #         assetCollection.children.link(lodCollection)
 
 
-        f.seek(vb.vertexStream.dataOffset)
-        for n in range(vb.vertexCount):
-            vertex,vBoneIndices,vBoneWeights = ParseVertex(f,vb.vertexStream.stride,vb.coHalf,boneCount)
-            vList.append(vertex)
-            biList.append(vBoneIndices)
-            bwList.append(vBoneWeights)
-        vertCount = len(vList)
-
-        #TRIANGLES
-        fList = []
-        fb = md.faceBlock
-        f.seek(fb.faceDataOffset)
-        for n in range(int(fb.indexCount/3)):
-            face = ParseFaces(f)
-            if face[0] < vertCount and face[1] < vertCount and face[2] < vertCount:
-                fList.append(face)
-        # print(len(fList))
-        #NORMALS
-        if vb.normalsStream:
-            nList = []
-            tList = []
-            flipList = []
-            if vb.realOffsets:
-                f.seek(vb.normalsStream.dataOffset)
-            else:
-                f.seek(vb.normalsStream.dataOffset+vb.vertexStream.dataSize)
-            for n in range(vb.vertexCount):
-                normal,tangent,flip = ParseNormals(f)
-                nList.append(normal)
-                tList.append(tangent)
-                flipList.append(flip)
-
-        #UV AND COLOR
-        uList = []
-        uList2 = []
-        cList = []
-
-        if vb.realOffsets:
-            f.seek(vb.uvStream.dataOffset)
-        else:
-            f.seek(vb.uvStream.dataOffset+vb.vertexStream.dataSize)
-            if vb.normalsStream:
-                f.seek(vb.normalsStream.dataSize,1)
-        for i in range(vb.vertexCount):
-            if vb.hasVertexColor:
-                vc = ParseColor(f)
-                cList.append(vc)
-            uv = ParseUV(f)
-            uList.append(uv)
-            if vb.hasTwoUV:
-                uv2 = ParseUV(f)
-                uList2.append(uv2)
-    # BUILD MESH ////////////////////////////////////////////////////
     mesh = bpy.data.meshes.new(meshName+"_MESH")
-    obj = bpy.data.objects.new(str(BlockIndex)+"_"+meshName,mesh)
+    obj = bpy.data.objects.new(str(primIndex) + "_" + meshName, mesh)
     lodCollection.objects.link(obj)
     bm = bmesh.new()
     bm.from_mesh(mesh)
 
-    # VERTICES ####################################
-    for v in vList:
-        vert = bm.verts.new()
-        vert.co = v
+    vb:VertexArrayResource = prim.vertexBlock
+    vs:StreamData = vb.vertexStream
+    ns:StreamData = vb.normalsStream
+    us:StreamData = vb.uvStream
+    ia:IndexArrayResource = prim.faceBlock
+    ish:StreamHandle = ia.indexStream
+    et = StreamData.VertexElementDesc.ElementType
+    HZDBones = []
+
+    if meshType == CullInfo.MeshType.RegularSkinnedMesh:
+        # Create Skeleton or Find it #####################
+        armature = None
+        armatureHash = str(ArchiveManager.get_file_hash(asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile+".core"))
+        for o in bpy.context.scene.collection.all_objects:
+            if type(o.data) == bpy.types.Armature:
+                if o.data.name == armatureHash:
+                    armature = o
+        if armature is None:
+            print("IMPORT MESH: Skeleton object not found")
+            armature = CreateSkeleton()
+
+        # Get every bone name because blender's bone indices don't match HZD
+        with open(HZDEditor.SkeletonAbsPath, 'rb') as f:
+            f.seek(28)
+            sktNameSize = r.int32(f)
+            f.seek(4, 1)
+            sktName = r.string(f, sktNameSize)
+            boneCount = r.int32(f)
+            for b in range(boneCount):
+                boneNameSize = r.int32(f)
+                f.seek(4, 1)
+                boneName = r.string(f, boneNameSize)
+                f.seek(6, 1)
+                HZDBones.append(boneName)
+        # Create vertex Groups
+        for bone in HZDBones:
+            obj.vertex_groups.new(name=bone)
+        # Attach to Armature ##################
+        obj.modifiers.new(name='Skeleton', type='ARMATURE')
+        obj.modifiers['Skeleton'].object = armature
+        obj.parent = armature
+        # Check if armature is in the asset collection
+        # if assetCollection.objects.find(armature.name) == -1:
+        #     armature.users_collection[0].objects.unlink(armature)
+        #     assetCollection.objects.link(armature)
+
+
+    if vb.inStream:
+        dataFile = stream
+    else:
+        dataFile = core
+    print("\nOpening: ",dataFile)
+    # Get the Position of Vertices from VertexStream
+    with open(dataFile, 'rb') as f:
+        for ei in vs.elementInfo:
+            if ei.elementType == et.Pos: # POSITION
+                print("Importing Vertex Positions")
+                for v in range(vb.vertexCount):
+                    f.seek(vs.streamAbsOffset + v * vs.stride + ei.offset)
+                    # print(vs.streamAbsOffset,v,vs.stride,ei.offset)
+                    # print(vs.streamAbsOffset + v * vs.stride + ei.offset)
+                    # print(f.tell())
+                    xyz = ParsePosition(f,ei.storageType)
+                    bmv = bm.verts.new()
+                    bmv.co = xyz
+
+    # Get the Triangles from IndexArrayResource
     bm.verts.ensure_lookup_table()
-    # TRIANGLES ####################################
-    for f in fList:
-        if f[0] != f[1] != f[2] != f[0]:
-            fvs = []
-            for i in f:
-                fv = bm.verts[i]
-                fvs.append(fv)
-            bface = bm.faces.new(fvs)
-            bface.smooth = True
-
-    bm.to_mesh(mesh)
-    bm.free()
-    mesh.update()  # prevents -1 indices, ensure_lookup_table didn't seem to work here
-    bm = bmesh.new()
-    bm.from_mesh(mesh)
-
-    # UV AND VERTEX COLOR ####################################
-    color_layer = bm.loops.layers.color.new("Color")
-    uv_layer = bm.loops.layers.uv.new("UV")
-    if vb.hasTwoUV:
-        uv_layer2 = bm.loops.layers.uv.new("UV2")
-    for findex,face in enumerate(bm.faces):
-        for lindex, loop in enumerate(face.loops):
-            loop[uv_layer].uv = uList[loop.vert.index]
-            if vb.hasVertexColor:
-                loop[color_layer] = cList[loop.vert.index]
-            if vb.hasTwoUV:
-                loop[uv_layer2].uv = uList2[loop.vert.index]
+    if ia.inStream:
+        dataFile = stream
+    else:
+        dataFile = core
+    if ia.indexFormat == 0:
+        indexSize = 2
+    else:
+        indexSize = 4
+    print("\nOpening: ", dataFile)
+    with open(dataFile, 'rb') as f:
+        print("Importing Faces")
+        for i in range(0,ia.indexCount,3):
+            f.seek(i*indexSize+ish.absOffset)
+            tris = ParseTris(f,ia.indexFormat)
+            if tris[0] != tris[1] != tris[2] != tris[0]:
+                fvs = []
+                for ti in tris:
+                    fv = bm.verts[ti]
+                    fvs.append(fv)
+                bface = bm.faces.new(fvs)
+                bface.smooth = True
 
     bm.to_mesh(mesh)
     bm.free()
     mesh.update()
 
-    # NORMALS #######################################
+    #now that we have vertices and faces, we can add other kinds of data.
+    if vb.inStream:
+        dataFile = stream
+    else:
+        dataFile = core
+    print("\nOpening: ",dataFile)
 
-    if vb.normalsStream:
-        mesh.use_auto_smooth = True
-        mesh.normals_split_custom_set_from_vertices(nList)
+    with open(dataFile, 'rb') as f:
+        if ns: # NORMALS STREAM
+            bm = bmesh.new()
+            bm.from_mesh(mesh)
+            print(" Checking Normals Stream for more data")
+            for ei in ns.elementInfo:
+                if ei.elementType == et.Normal:
+                    print("     Importing Normals")
+                    normals = []
+                    for v in range(vb.vertexCount):
+                        f.seek(ns.streamAbsOffset + v * ns.stride + ei.offset)
+                        n = ParseNormal(f,ei.storageType)
+                        # print(n)
+                        normals.append(n)
+                    bm.to_mesh(mesh)
+                    bm.free()
+                    mesh.update()
+                    mesh.use_auto_smooth = True
+                    mesh.normals_split_custom_set_from_vertices(normals)
+                    bm = bmesh.new()
+                    bm.from_mesh(mesh)
+                # elif ei.elementType == et.Tangent:
+                #     print("Importing Tangent")
+                # elif ei.elementType == et.TangentBFlip:
+                #     print("Importing TangentBFlip")
+                # elif ei.elementType == et.Binormal:
+                #     print("Importing Binormal")
+                else:
+                    print("     ElementType not supported: ",ei.elementType)
+            bm.to_mesh(mesh)
+            bm.free()
+            mesh.update()
 
-
-    # VERTEX GROUPS ####################################
-    SkeletonPath = HZDEditor.SkeletonAbsPath
-    CoreBones = []
-
-    with open(SkeletonPath, 'rb') as f: #Get every bone name because blender's bone indices don't match HZD
-        f.seek(28)
-        sktNameSize = r.int32(f)
-        f.seek(4, 1)
-        sktName = r.string(f, sktNameSize)
-        boneCount = r.int32(f)
-        for b in range(boneCount):
-            boneNameSize = r.int32(f)
-            f.seek(4, 1)
-            boneName = r.string(f, boneNameSize)
-            f.seek(6, 1)
-            CoreBones.append(boneName)
-
-    for bone in CoreBones: #Create vertex Groups
-        obj.vertex_groups.new(name=bone)
-    # deform_layer = bm.verts.layers.deform.new()
-
-
-
-    for v in mesh.vertices:
-        vindex = v.index
-
-        for index, boneindex in enumerate(biList[vindex]):
-
-            index = index - 1
-            if index == -1:
-                index = len(biList[vindex]) - 1
-            if len(CoreBones)>boneindex:
-                coreBone = CoreBones[boneindex] #Using the order from the skeleton file, boneindex gives the correct bone name.
-                weight = bwList[vindex][index] #BoneWeight for the current vertex(vindex), index gives the
-                obj.vertex_groups[coreBone].add([vindex], weight, "ADD")
+        # UV STREAM
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        print(" Checking UV Stream for more data")
+        for ei in us.elementInfo:
+            if ei.elementType in (et.UV0, et.UV1, et.UV2, et.UV3, et.UV4, et.UV5, et.UV6):
+                print("     Importing UV Layer: ",ei.elementType.name)
+                uv_layer = bm.loops.layers.uv.new(ei.elementType.name)
+                for finder,face in enumerate(bm.faces):
+                    for lindex,loop in enumerate(face.loops):
+                        vindex = loop.vert.index
+                        f.seek(us.streamAbsOffset+us.stride*vindex+ei.offset)
+                        loop[uv_layer].uv = ParseUVChannel(f,ei.storageType)
+            elif ei.elementType == et.Color:
+                print("     Importing Vertex Color")
+                color_layer = bm.loops.layers.color.new("Color")
+                for finder,face in enumerate(bm.faces):
+                    for lider, loop in enumerate(face.loops):
+                        vindex = loop.vert.index
+                        f.seek(us.streamAbsOffset+us.stride*vindex+ei.offset)
+                        loop[color_layer] = ParseVertexColor(f,ei.storageType)
             else:
-                raise Exception("Vertex wasn't parsed correctly.{v} is not a bone".format(v=boneindex))
+                print("     ElementType not supported: ",ei.elementType)
+        bm.to_mesh(mesh)
+        bm.free()
+        mesh.update()
 
+        # VERTEX STREAM
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        print(" Checking Vertex Stream for more data")
+        for ei in vs.elementInfo:
+            if ei.elementType == et.BlendIndices:
+                print("     Importing BlendIndices")
+                bm.to_mesh(mesh)
+                bm.free()
 
-    # Attach to Armature ##################
-    obj.modifiers.new(name='Skeleton', type='ARMATURE')
-    obj.modifiers['Skeleton'].object = armature
-    obj.parent = armature
-    # Check if armature is in the asset collection
-    if assetCollection.objects.find(armature.name) == -1:
-        armature.users_collection[0].objects.unlink(armature)
-        assetCollection.objects.link(armature)
+                for v in range(vb.vertexCount):
+                    indicesWeight = ParseBoneWeights(f,v,vs)
+                    for bi in indicesWeight.keys():
+                        vgName = HZDBones[bi]
+                        # print(vgName,v,indicesWeight[bi])
+                        obj.vertex_groups[vgName].add([v], indicesWeight[bi], "ADD")
+                bm = bmesh.new()
+                bm.from_mesh(mesh)
+            elif ei.elementType in (et.BlendIndices2,et.BlendWeights,et.BlendWeights2):
+                pass #Handled by BlendIndices ParseBoneWeights()
+            elif ei.elementType == et.Pos:
+                pass #Handled earlier in this function
+            else:
+                print("     ElementType not supported: ",ei.elementType)
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+
+    if meshType == CullInfo.MeshType.StaticMesh and vb.inStream:
+        # Get robot_modelhelpers.core path and skeleton path
+        modelHelperPath = ""
+
+        streamPath = vs.streamInfo.path
+        streamPath = streamPath[6:]  # remove "cache:"
+        streamPath = streamPath.rpartition("/")[0]  # remove file name and last /
+        streamPath = streamPath[:-5]  # remove "parts"
+        skeletonAssetPath = streamPath + "skeletons/mesh_skeleton_rootbone.core"
+        modelHelperPath = streamPath + "robot_modelhelpers.core"
+        print(modelHelperPath)
+        print(skeletonAssetPath)
+
+        if HZDEditor.ModelHelpersPath == "":
+            #there's no reference to the core file of the asset itself, so we can't know what its path is.
+            if modelHelperPath != "":
+                AM = ArchiveManager()
+                modelHelperPath = AM.FindAndExtract(modelHelperPath, False)
+                HZDEditor.ModelHelpersPath = modelHelperPath
+        else:
+            modelHelperPath = bpy.path.abspath(HZDEditor.ModelHelpersPath)
+
+        armatureHash = str(ArchiveManager.get_file_hash(skeletonAssetPath))
+        print(skeletonAssetPath,armatureHash)
+        armature = None
+        for o in bpy.context.scene.collection.all_objects:
+            if type(o.data) == bpy.types.Armature:
+                if o.data.name == armatureHash:
+                    armature = o
+
+        if modelHelperPath != "" and armature is not None:
+            parentIndex, matrix = findHelperInFile(modelHelperPath,assetName)
+
+            if parentIndex is None:
+                print("Model not found in robot_modelhelpers.core")
+            else:
+
+                HZDBones = []
+                # Get every bone name because blender's bone indices don't match HZD
+                AM = ArchiveManager()
+                HZDEditor.SkeletonAbsPath = AM.FindAndExtract(skeletonAssetPath, False)
+
+                with open(HZDEditor.SkeletonAbsPath, 'rb') as f:
+                    f.seek(28)
+                    sktNameSize = r.int32(f)
+                    f.seek(4, 1)
+                    sktName = r.string(f, sktNameSize)
+                    boneCount = r.int32(f)
+                    for b in range(parentIndex+1):
+                        boneNameSize = r.int32(f)
+                        f.seek(4, 1)
+                        boneName = r.string(f, boneNameSize)
+                        f.seek(6, 1)
+                        HZDBones.append(boneName)
+                        if b == parentIndex:
+                            break
+                print("Armature = ",armature,"   Bone = ", boneName, "   Matrix = ", matrix)
+                obj.parent = armature
+                obj.parent_type = 'BONE'
+                obj.parent_bone = boneName
+                obj.rotation_mode = 'QUATERNION'
+                boneVector = mathutils.Vector([0.0,armature.data.bones[boneName].length,0.0])
+                matrix = mathutils.Matrix.inverted_safe(matrix)
+
+                obj.matrix_basis = matrix
+                obj.location += -boneVector
+
+        else:
+            print("WARNING: Armature not found")
 
     if HZDEditor.ExtractTextures:
-        matblock = asset.LODGroups[Index].LODList[LODIndex].materialBlockList[BlockIndex]
+        #TODO need a better way to find that material. LodMeshResource possibly doesn't exist, material is possibly inside Primitive instead of mesh.
+        matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
         CreateMaterial(obj,matblock,meshName)
 
 def ExtractAsset(assetPath):
@@ -940,21 +1215,17 @@ def ExtractAsset(assetPath):
     AM = ArchiveManager()
     #Extract Asset
 
-    assetFile = AM.FindFile(assetPath)
-    filePath = AM.ExtractFile(assetFile,assetPath,False)
-
-    assetStreamFile = AM.FindFile(assetPath+".stream")
-    fileStreamPath = AM.ExtractFile(assetStreamFile, assetPath+".stream", False)
+    filePath = AM.FindAndExtract(assetPath,False)
+    fileStreamPath = AM.FindAndExtract(assetPath+".stream", False)
 
     HZDEditor = bpy.context.scene.HZDEditor
     HZDEditor.HZDPath = filePath
 
     ReadCoreFile()
-    skeletonFile = asset.LODGroups[0].LODList[0].meshNameBlock.skeletonPath
+    skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile #TODO should do more checks on here (not sure if static or skinned, not sure if external
     say(skeletonFile)
 
-    assetSkeletonFile = AM.FindFile(skeletonFile + ".core")
-    fileSkeletonPath = AM.ExtractFile(assetSkeletonFile, skeletonFile + ".core", False)
+    fileSkeletonPath = AM.FindAndExtract(skeletonFile + ".core", False)
     HZDEditor.SkeletonPath = fileSkeletonPath
     return
 
@@ -1118,8 +1389,7 @@ def ExtractTexture(outWorkspace,texPath):
                     if os.path.exists(outWorkspace + texPath+".core.stream"):
                         streamFilePath = outWorkspace + texPath+".core.stream"
                     else:
-                        streamFileEntry = AM.FindFile(texPath+".core.stream")
-                        streamFilePath = AM.ExtractFile(streamFileEntry,texPath,True)
+                        streamFilePath = AM.FindAndExtract(texPath,True)
                     with open(streamFilePath,'rb') as s:
                         s.seek(t.streamOffset)
                         streamData = s.read(t.streamSize64)
@@ -1140,8 +1410,7 @@ def ExtractTexture(outWorkspace,texPath):
         ParseTexture(outWorkspace+texPath+".core")
     else:
         #Extract Core
-        texFileEntry = AM.FindFile(texPath+".core")
-        filePath = AM.ExtractFile(texFileEntry,texPath,False)
+        filePath = AM.FindAndExtract(texPath,False)
 
         ParseTexture(filePath)
 
@@ -1277,203 +1546,268 @@ def CreateMaterial(obj,matblock,meshName):
         obj.data.materials.append(mat)
 
 def CreateSkeleton():
-    r = ByteReader()
+    r = ByteReader
     HZDEditor = bpy.context.scene.HZDEditor
     SkeletonPath = HZDEditor.SkeletonAbsPath
-    Bones = []
-    ParentIndices = []
+    skeletonFile = ""
+    if len(asset.LodMeshResources) > 0:
+        if asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile:
+            skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile
+            skeletonFile += ".core"
+            print("Create Skeleton: Skeleton reference found -> ", skeletonFile)
+        else:
+            print("Create Skeleton: Could not find skeleton reference")
+            return #failed to find skeleton path string for hash reference. The skeleton data wouldn't have a proper name.
+    if SkeletonPath == "" and skeletonFile != "":
+        print("Create Skeleton: Skeleton Path not specified, extracting from reference...")
+        AM = ArchiveManager()
+        fileSkeletonPath = AM.FindAndExtract(skeletonFile, False)
+        HZDEditor.SkeletonPath = fileSkeletonPath
+        SkeletonPath = HZDEditor.SkeletonAbsPath
+        print("Create Skeleton: Skeleton Path = ",SkeletonPath)
 
-    with open(SkeletonPath,'rb') as f:
-        f.seek(28)
-        sktNameSize = r.int32(f)
-        f.seek(4,1)
-        sktName = r.string(f,sktNameSize)
-        boneCount = r.int32(f)
-        # print(boneCount)
-        for b in range(boneCount):
-            boneNameSize = r.int32(f)
-            f.seek(4,1)
-            boneName = r.string(f,boneNameSize)
-            f.seek(4,1)
-            parentIndex = r.int16(f)
-            # print(parentIndex)
-            Bones.append(boneName)
-            ParentIndices.append(parentIndex)
+    if SkeletonPath != "" and skeletonFile != "":
+        print("Create Skeleton: Paths are valid, starting to create skeleton...")
+        Bones = []
+        ParentIndices = []
 
-    armatureName = str(ArchiveManager.get_file_hash(asset.LODGroups[0].LODList[0].meshNameBlock.skeletonPath))
-    armature = bpy.data.armatures.new(armatureName)
-    obj = bpy.data.objects.new(sktName, armature)
-    bpy.context.scene.collection.objects.link(obj)
+        with open(SkeletonPath,'rb') as f:
+            f.seek(28)
+            sktNameSize = r.int32(f)
+            f.seek(4,1)
+            sktName = r.string(f,sktNameSize)
+            boneCount = r.int32(f)
+            # print(boneCount)
+            for b in range(boneCount):
+                boneNameSize = r.int32(f)
+                f.seek(4,1)
+                boneName = r.string(f,boneNameSize)
+                f.seek(4,1)
+                parentIndex = r.int16(f)
+                # print(parentIndex)
+                Bones.append(boneName)
+                ParentIndices.append(parentIndex)
+
+        armatureName = str(ArchiveManager.get_file_hash(skeletonFile))
+        armature = bpy.data.armatures.new(armatureName)
+        obj = bpy.data.objects.new(sktName, armature)
+        bpy.context.scene.collection.objects.link(obj)
+        bpy.context.view_layer.objects.active = obj
+        HZDEditor.SkeletonName = obj.name
+
+        bpy.ops.object.mode_set(mode="EDIT")
+        print("Create Skeleton: Creating Bones...")
+        for i,b in enumerate(Bones):
+            bone = armature.edit_bones.new(b)
+            bone.parent = armature.edit_bones[ParentIndices[i]]
+            # print(bone.parent)
+            bone.tail = mathutils.Vector([0,0.0,0.1])
+        # TODO Not every bone has a matrix, if it's not used by the asset that populated the BoneMatrices the bone will be at world origin
+        print("Create Skeleton: Placing Bones...")
+        for b in BoneMatrices:
+            bone = armature.edit_bones[b]
+            # bone.tail = mathutils.Vector([0,0,1])
+
+            bone.transform(BoneMatrices[b])
+            # bone.transform(mathutils.Matrix.Rotation(math.radians(-90),4,'X'))
+
+        #TODO I can't figure out a better way to switch Z and Y axis
+        print("Create Skeleton: Swaping Bones Z and Y axis")
+        for b in armature.edit_bones:
+            zaxis = b.z_axis
+            length = 0.1 #default bone length
+
+            if len(b.children) == 1:
+                if b.children[0].head != mathutils.Vector([0.0,0.0,0.0]):
+                    b.tail = b.children[0].head # connect bone to child
+                else:
+                    b.tail = b.head + (-zaxis * length) #unless the child is at 0,0,0
+            else:
+                # if no children or multiple children, make the bone point in the -z axis
+                # this was necessary for static meshes attached to the skeleton
+                b.tail = b.head + (-zaxis * length)
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        return obj
+def UpdateSkeleton(armatureObject):
+    obj = armatureObject
+    armature = obj.data
     bpy.context.view_layer.objects.active = obj
-    HZDEditor.SkeletonName = obj.name
-
     bpy.ops.object.mode_set(mode="EDIT")
+    #TODO update skeleton bone matrices when mesh is imported on an existing armature
 
-    for i,b in enumerate(Bones):
-        bone = armature.edit_bones.new(b)
-        bone.parent = armature.edit_bones[ParentIndices[i]]
-        # print(bone.parent)
-        bone.tail = mathutils.Vector([0,0,1])
-
-    for b in BoneMatrices:
-        bone = armature.edit_bones[b]
-        bone.tail = mathutils.Vector([0,0,1])
-        bone.transform(BoneMatrices[b])
-
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-    return obj
-
-def PackVertex(f,vertex,stride,half=False,boneCount=0):
-    p = BytePacker()
-    bVertex = b''
+def WritePosition(f,vertex,elementInfo):
+    p = BytePacker
+    ei:StreamData.VertexElementDesc = elementInfo
     x = vertex.co[0]
     y = vertex.co[1]
     z = vertex.co[2]
-    if half:
-        coLength = 8
-        bVertex += p.float16(x)
-        bVertex += p.float16(y)
-        bVertex += p.float16(z)
-        bVertex += b'\x00\x3C'
+    w = 1.0
+    if ei.count == 4:
+        v = [x,y,z,w]
+    elif ei.count == 3:
+        v = [x,y,z]
     else:
-        coLength = 12
-        bVertex += p.float(x)
-        bVertex += p.float(y)
-        bVertex += p.float(z)
-    # Bone Indices
-    if boneCount >= 256:
-        bic = (stride - coLength) / 3
-        if bic - int(bic) != 0:
-            if stride == 32:
-                bic = 8
-            else:
-                bic = (stride - coLength) / 2
-        bint16 = True
-        bic = int(bic)
+        raise Exception("Position Format : Count of %d is not supported." % ei.count)
+    if ei.storageType == StreamData.VertexElementDesc.StorageType.X10Y10Z10W2Normalized:
+        f.write(p.packVertexStorageType(v,ei.storageType))
     else:
-        bic = int((stride - coLength) / 2)  # bone indices count
-        bint16 = False
+        for pos in v:
+            f.write(p.packVertexStorageType(pos, ei.storageType))
+
+def GetVertexBlendIndices(vertex):
+    groupWeights = {}
     # Gather bone groups
-    groupsweights = {}
     for vg in vertex.groups:
         if vg.weight > 0.0:
-            groupsweights[vg.group] = vg.weight
-    # print(groupsweights)
-    #Normalize
-    totalweight = 0.0
-    for gw in groupsweights:
-        totalweight += groupsweights[gw]
-    if totalweight == 0:
+            groupWeights[vg.group] = vg.weight
+    # Normalize
+    totalWeight = 0
+    for k in groupWeights.keys():
+        totalWeight += groupWeights[k]
+    if totalWeight == 0:
         raise Exception("Vertex {v} has no weight".format(v=vertex.index))
-    normalizer = 1/totalweight
-    for gw in groupsweights:
-        groupsweights[gw] *= normalizer
+    normalizer = 1/totalWeight
+    for gw in groupWeights:
+        groupWeights[gw] *= normalizer
     #Sort Weights
-    sortedweights = sorted(groupsweights.items(),key=operator.itemgetter(1),reverse=True)
-    #Truncate Weights
-    truncweights = sortedweights[0:bic]
-    boneRepeat = bic - len(truncweights)
-    # print(len(truncweights))
-    for i, bw in enumerate(truncweights):
-        if bint16:
-            bVertex += p.uint16(bw[0])
-        else:
-            bVertex += p.uint8(bw[0])
-    # print(len(bVertex))
-    for i  in range(boneRepeat):
-        if bint16:
-            bVertex += p.uint16(truncweights[len(truncweights)-1][0])
-        else:
-            bVertex += p.uint8(truncweights[len(truncweights) - 1][0])
-    # print(len(bVertex))
-    for i,bw in enumerate(truncweights):
-        if i == 0:
-            pass #the biggest weight goes as the remainder
-        else:
-            # print(bw[1],bw[1]*255,int(round(bw[1]*255)))
-            bVertex += p.uint8(int(round(bw[1]*255)))
-    # print(len(bVertex))
-    #Fill remainder
-    if bint16:
-        vbLength = coLength+(bic*2)+bic
-    else:
-        vbLength = coLength + bic + bic
-    # print(vbLength,len(bVertex))
-    for b in range(len(bVertex),stride):
-        bVertex += b'\x00'
-    # print(bic, boneRepeat,len(bVertex))
-    if len(bVertex) == stride:
-        f.write(bVertex)
-    else:
-        raise Exception("Vertex bytes not expected length:{v} instead of {e}".format(v=len(bVertex),e=stride))
-def PackNormal(f,ntb,stride):
-    p = BytePacker()
-    bNormals = b''
-    nx = ntb[0][0]
-    ny = ntb[0][1]
-    nz = ntb[0][2]
-    bNormals += p.float(nx)
-    bNormals += p.float(ny)
-    bNormals += p.float(nz)
-    if stride == 28:
-        tx = ntb[1][0]
-        ty = ntb[1][1]
-        tz = ntb[1][2]
-        bs = ntb[2]
-        bNormals += p.float(tx)
-        bNormals += p.float(ty)
-        bNormals += p.float(tz)
-        bNormals += p.float(bs)
+    sortedWeights = sorted(groupWeights.items(),key=operator.itemgetter(1),reverse=True)
+    #TruncateWeights
+    truncWeights = sortedWeights[0:8] # 8 seems good, haven't seen meshes with more than 8 indices
+    return truncWeights
+def WriteBlendIndicesWeights(f,vertex,elementInfo):
+    p = BytePacker
+    ei: StreamData.VertexElementDesc = elementInfo
+    et = StreamData.VertexElementDesc.ElementType
+    vg = GetVertexBlendIndices(vertex) # At this point vg is a list of list instead of dict. ((58,0.4),(23,0.3))
+    bi = b''
+    if ei.elementType == et.BlendIndices:
+        for i in range(ei.count):
+            if i > len(vg)-1:
+                bi += p.packVertexStorageType(vg[-1][0],ei.storageType) # fill with last index
+            else:
+                bi += p.packVertexStorageType(vg[i][0],ei.storageType)
+    if ei.elementType == et.BlendIndices2:
+        for i in range(ei.count):
+            # I should be taking count of BlendIndice1 instead of 2. But I assume they both have same count.
+            if i + ei.count > len(vg)-1:
+                bi += p.packVertexStorageType(vg[-1][0],ei.storageType) # fill with last index
+            else:
+                bi += p.packVertexStorageType(vg[i + ei.count][0],ei.storageType)
+    if ei.elementType == et.BlendWeights:
+        for i in range(ei.count):
+            if i + 1 > len(vg)-1:
+                bi += p.packVertexStorageType(0.0,ei.storageType) # fill with 0.0
+            else:
+                bi += p.packVertexStorageType(vg[i+1][1],ei.storageType)
+    if ei.elementType == et.BlendWeights2:
+        for i in range(ei.count):
+            if i + 1 + ei.count > len(vg)-1: # + 1 because we skipped first index before
+                bi += p.packVertexStorageType(0.0,ei.storageType) # fill with 0.0
+            else:
+                bi += p.packVertexStorageType(vg[i + 1 + ei.count][1],ei.storageType)
+    f.write(bi)
 
-    f.write(bNormals)
-def PackUVs(f,uv):
-    p = BytePacker()
-    bUV = b''
-    if uv[2] is not None: #VERTEX COLOR
-        # print("Has Vertex Color",uv)
-        bUV += p.uint8(int(uv[2][0]*255))
-        bUV += p.uint8(int(uv[2][1]*255))
-        bUV += p.uint8(int(uv[2][2]*255))
-        bUV += p.uint8(int(uv[2][3]*255))
-    bUV += p.float16(uv[0][0]) #UV
-    bUV += p.float16(uv[0][1])
-    if uv[1] is not None: #UV2
-        # print("Has 2 UVs",uv)
-        bUV += p.float16(uv[1][0])
-        bUV += p.float16(uv[1][1])
-    f.write(bUV)
-def PackFace(f,face):
-    p = BytePacker()
-    bFace = b''
-    v1 = face.vertices[0]
-    v2 = face.vertices[1]
-    v3 = face.vertices[2]
-    bFace += p.uint16(v1)
-    bFace += p.uint16(v2)
-    bFace += p.uint16(v3)
-    f.write(bFace)
-
-def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
-    r = ByteReader()
-    p = BytePacker()
-    print(isGroup, Index, LODIndex, BlockIndex)
-    if isGroup:
-        lod = asset.LODGroups[Index].LODList[LODIndex]
-        md = lod.meshBlockList[BlockIndex]
-        meshName = lod.meshNameBlock.name
+def WriteNormal(f,normal,elementInfo):
+    p = BytePacker
+    ei: StreamData.VertexElementDesc = elementInfo
+    if ei.storageType == StreamData.VertexElementDesc.StorageType.X10Y10Z10W2Normalized:
+        f.write(p.packVertexStorageType(normal,ei.storageType))
     else:
-        lod = asset.LODObjects[Index].LODList[LODIndex]
-        md = lod.meshBlockList[BlockIndex]
-        meshName = lod.meshNameBlock.name
+        for n in normal:
+            f.write(p.packVertexStorageType(n,ei.storageType))
+def WriteTangentBFlip(f,tangent,flip,elementInfo):
+    p = BytePacker
+    ei: StreamData.VertexElementDesc = elementInfo
+    tf = []
+    for t in tangent:
+        tf.append(t)
+    tf.append(flip)
+    if ei.storageType == StreamData.VertexElementDesc.StorageType.X10Y10Z10W2Normalized:
+        f.write(p.packVertexStorageType(tf,ei.storageType))
+    else:
+        for t in tf:
+            f.write(p.packVertexStorageType(t,ei.storageType))
+
+def GetUVs(editedMesh,uvIndex=0):
+    UVs = [(0.0, 0.0)] * len(editedMesh.vertices)
+    bm = bmesh.new()
+    bm.from_mesh(editedMesh)
+    bm.faces.ensure_lookup_table()
+    # Get UVs and Color
+    for bface in bm.faces:
+        for loop in bface.loops:
+            u = loop[bm.loops.layers.uv[uvIndex]].uv[0]
+            v = loop[bm.loops.layers.uv[uvIndex]].uv[1]
+            UVs[loop.vert.index] = [u,v]
+    bm.to_mesh(editedMesh)
+    bm.free()
+    editedMesh.update()
+    return UVs
+def WriteUVs(f,UVs,index,elementInfo):
+    p = BytePacker
+    ei: StreamData.VertexElementDesc = elementInfo
+    uv = b''
+    for u in UVs[index]:
+        uv += p.packVertexStorageType(u,ei.storageType)
+    f.write(uv)
+
+def GetColor(editedMesh):
+    Colors = [(0,0,0,0)] * len(editedMesh.vertices)
+    bm = bmesh.new()
+    bm.from_mesh(editedMesh)
+    bm.faces.ensure_lookup_table()
+    # Get UVs and Color
+    for bface in bm.faces:
+        for loop in bface.loops:
+            uv = loop[bm.loops.layers.color[0]].uv
+            Colors[loop.vert.index] = uv
+    return Colors
+def WriteColor(f,vertexColors,index,elementInfo):
+    p = BytePacker
+    ei: StreamData.VertexElementDesc = elementInfo
+    vc = b''
+    for c in vertexColors[index]:
+        vc += p.packVertexStorageType(c,ei.storageType)
+    f.write(vc)
+
+def WriteTriangle(f,poly,indexArray):
+    p = BytePacker
+    ia: IndexArrayResource = indexArray
+    if ia.indexFormat:
+        for v in poly.vertices:
+            f.write(p.uint32(v))
+    else:
+        for v in poly.vertices:
+            f.write(p.uint16(v))
+
+def ExportMesh(isLodMesh, resIndex, meshIndex, primIndex):
+    r = ByteReader
+    p = BytePacker
+
+    if isLodMesh:
+        mesh = asset.LodMeshResources[resIndex].meshList[meshIndex]
+        prim = mesh.primitives[primIndex]
+        meshName = mesh.meshName
+    else:
+        mesh = asset.MultiMeshResources[resIndex].meshList[meshIndex]
+        prim = mesh.primitives[primIndex]
+        meshName = mesh.meshName
+    print("\nExporting : " + str(primIndex) + "_" + meshName)
+
     HZDEditor = bpy.context.scene.HZDEditor
     core = HZDEditor.HZDAbsPath
     stream = core + ".stream"
-    coresize = os.path.getsize(core)
-    vb = md.vertexBlock
-    fb = md.faceBlock
 
-    objectName = str(BlockIndex)+"_"+meshName
+    vb: VertexArrayResource = prim.vertexBlock
+    vs: StreamData = vb.vertexStream
+    ns: StreamData = vb.normalsStream
+    us: StreamData = vb.uvStream
+    ia: IndexArrayResource = prim.faceBlock
+    ish: StreamHandle = ia.indexStream
+    et = StreamData.VertexElementDesc.ElementType
+
+    objectName = str(primIndex) + "_" + meshName
     editedMesh = bpy.data.objects[objectName].data
     boneCount = len(bpy.data.objects[HZDEditor.SkeletonName].data.bones)
 
@@ -1488,7 +1822,6 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
     #     sourcecore = core
     #     sourcestream = stream
 
-
     sourcecore = core
     sourcestream = stream
     coresize = os.path.getsize(sourcecore)
@@ -1496,75 +1829,76 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
 
     # Write Stream
     with open(sourcestream, 'rb') as f, open(stream + "TMP", 'wb+') as w:
-        CopyFile(f, w, 0, md.vertexBlock.vertexStream.dataOffset) #Copy the source file up to the vertex position
+        CopyFile(f, w, 0,vs.streamAbsOffset) #Copy the source file up to the vertex position
 
-        #Vertices
-
-        newCoVOffset = w.tell() #New offset of our vertex stream
+        #Write Vertex Stream
+        newVertexStreamOffset = w.tell()
         for v in editedMesh.vertices:
-            PackVertex(w,v,vb.vertexStream.stride,vb.coHalf,boneCount)
+            for ei in vs.elementInfo:
+                if ei.elementType == et.Pos:
+                    WritePosition(w,v,ei)
+                elif ei.elementType in (et.BlendIndices,et.BlendIndices2,et.BlendWeights,et.BlendWeights2):
+                    WriteBlendIndicesWeights(w,v,ei)
+                else:
+                    print("     ElementType not supported in Vertex Stream: ", ei.elementType)
         FillChunk(w)
-        newCoVSize = w.tell()-newCoVOffset
+        newVertexStreamSize = w.tell() - newVertexStreamOffset
 
-        #Normals
-        if vb.normalsStream:
-            newCoNOffset = w.tell()
-            editedMesh.calc_tangents()
-            NTB = [((1.0,0.0,0.0),(0.0,1.0,0.0),0.0)] * len(editedMesh.vertices) #Normal Tangent Bi-tangent
-            #Get Normals
+        if ns:
+            # Write Normals Stream
+            NTB = [((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), 0.0)] * len(editedMesh.vertices)  # Normal Tangent Bi-tangent
+            # Get Normals
+            editedMesh.loops.data.calc_tangents()
             for l in editedMesh.loops:
                 if l.bitangent_sign == -1:
                     flip = 1.0
                 else:
                     flip = 0.0
                 NTB[l.vertex_index] = (l.normal, l.tangent, flip)
-            #Write Normals
-            for n in NTB:
-                PackNormal(w,n,vb.normalsStream.stride)
+
+            newNormalStreamOffset = w.tell()
+            for v in editedMesh.vertices:
+                for ei in ns.elementInfo:
+                    if ei.elementType == et.Normal:
+                        WriteNormal(w,NTB[v.index][0],ei)
+                    elif ei.elementType == et.TangentBFlip:
+                        WriteTangentBFlip(w,NTB[v.index][1],NTB[v.index][2],ei)
+                    else:
+                        print("     ElementType not supported in Normals Stream: ", ei.elementType)
             FillChunk(w)
-            newCoNSize = w.tell()-newCoNOffset
+            newNormalStreamSize = w.tell() - newNormalStreamOffset
 
-        #UVs
-        newCoUOffset = w.tell()
-        UVs = [((0.0,0.0),(0.0,0.0),(0,0,0,0))] * len(editedMesh.vertices)
-        bm = bmesh.new()
-        bm.from_mesh(editedMesh)
-        bm.faces.ensure_lookup_table()
-        #Get UVs and Color
-        for bface in bm.faces:
-            for loop in bface.loops:
-                vertUV = [None,None,None] #UV1,UV2,Color
+        # Write UV per vertex
+        newUVStreamOffset = w.tell()
+        # Get All UVs
+        allUVs = []
 
-                uv1 = loop[bm.loops.layers.uv[0]].uv
-                vertUV[0] = uv1
-                if vb.hasTwoUV:
-                    if len(editedMesh.uv_layers) == 2:
-                        uv2 = loop[bm.loops.layers.uv[1]].uv
-                        vertUV[1] = uv2
-                    else:
-                        raise Exception("Mesh Block is expecting 2 UV Layers")
-                if vb.hasVertexColor:
-                    if len(editedMesh.vertex_colors) == 1:
-                        vcolor = loop[bm.loops.layers.color[0]]
-                        vertUV[2] = vcolor
-                    else:
-                        raise Exception("Mesh Block is expecting 1 Vertex Color layer")
-                UVs[loop.vert.index] = vertUV
-        #Write UVs
-        for uvindex,uv in enumerate(UVs):
-            PackUVs(w,uv)
+
+        for ei in us.elementInfo:
+            if ei.elementType in (et.UV0, et.UV1, et.UV2, et.UV3, et.UV4, et.UV5, et.UV6):
+                allUVs.append(GetUVs(editedMesh,int(ei.elementType.name[-1])))
+            if ei.elementType == et.Color:
+                vertexColor = GetColor(editedMesh)
+
+        for v in editedMesh.vertices:
+            for ei in us.elementInfo:
+                if ei.elementType in (et.UV0,et.UV1,et.UV2,et.UV3,et.UV4,et.UV5,et.UV6):
+                    WriteUVs(w,allUVs[int(ei.elementType.name[-1])],v.index,ei)
+                elif ei.elementType == et.Color:
+                    WriteColor(w,vertexColor,v.index,ei)
+                else:
+                    print("     ElementType not supported in Normals Stream: ", ei.elementType)
         FillChunk(w)
-        newCoUSize = w.tell()-newCoUOffset
+        newUVStreamSize = w.tell() - newUVStreamOffset
 
-        #Faces
-        newCoFOffset = w.tell()
+        newIndexStreamOffset = w.tell()
         for poly in editedMesh.polygons:
-            PackFace(w,poly)
+            WriteTriangle(w,poly,ia)
         FillChunk(w)
-        newCoFSize = w.tell()-newCoFOffset
+        newIndexStreamSize = w.tell() - newIndexStreamOffset
 
-        endOffset = md.faceBlock.faceDataOffset + md.faceBlock.faceDataSize
-        CopyFile(f,w,endOffset,streamsize-endOffset) #Copy the source file to the end.
+        endOffset = ish.resourceOffset + ish.resourceLength
+        CopyFile(f, w, endOffset, streamsize - endOffset)  # Copy the source file to the end.
 
     # Write Core
     with open(sourcecore, 'rb') as f, open(core+"TMP",'wb+') as w:
@@ -1573,102 +1907,96 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
         #Vertex Counts
         w.seek(vb.posVCount)
         w.write(p.int32(len(editedMesh.vertices)))
-        w.seek(lod.meshBlockInfo.meshInfos[BlockIndex].posVCount)
+        w.seek(mesh.skinInfo.meshInfos[primIndex].posVCount)
         w.write(p.int32(len(editedMesh.vertices)))
         #Vertex
-        w.seek(vb.vertexStream.posOffset)
-        w.write(p.int64(newCoVOffset))
-        w.seek(vb.vertexStream.posSize)
-        w.write(p.int64(newCoVSize))
+        w.seek(vs.streamInfo.offsetPos)
+        w.write(p.uint64(newVertexStreamOffset))
+        w.seek(vs.streamInfo.lengthPos)
+        w.write(p.uint64(newVertexStreamSize))
         #Edges
-
+        #TODO somehow gotta handle unknown DataBufferResources
         #Normals
-        if vb.normalsStream:
-            w.seek(vb.normalsStream.posOffset)
-            if vb.realOffsets:
-                w.write(p.int64(newCoNOffset))
-            else:
-                w.write(p.int64(newCoVOffset))
-            w.seek(vb.normalsStream.posSize)
-            w.write(p.int64(newCoNSize))
+        if ns:
+            w.seek(ns.streamInfo.offsetPos)
+            w.write(p.uint64(newVertexStreamOffset))
+            w.seek(ns.streamInfo.lengthPos)
+            w.write(p.uint64(newNormalStreamSize))
         #UVs
-        w.seek(vb.uvStream.posOffset)
-        if vb.realOffsets:
-            w.write(p.int64(newCoUOffset))
-        else:
-            w.write(p.int64(newCoVOffset))
-        w.seek(vb.uvStream.posSize)
-        w.write(p.int64(newCoUSize))
+        w.seek(us.streamInfo.offsetPos)
+        w.write(p.uint64(newVertexStreamOffset))
+        w.seek(us.streamInfo.lengthPos)
+        w.write(p.uint64(newUVStreamSize))
         #Faces
-        w.seek(fb.posIndexCount)
+        w.seek(ia.posIndexCount)
         w.write(p.int32(len(editedMesh.polygons)*3))
-        w.seek(md.stuffBlock.posOffset)
+        w.seek(prim.posIndexCount)
         w.write(p.int32(len(editedMesh.polygons)*3))
-        w.seek(fb.posOffset)
-        w.write(p.int64(newCoFOffset))
-        w.seek(fb.posSize)
-        w.write(p.int64(newCoFSize))
+        w.seek(ish.offsetPos)
+        w.write(p.uint64(newIndexStreamOffset))
+        w.seek(ish.lengthPos)
+        w.write(p.uint64(newIndexStreamSize))
 
         # the place where new mesh block ends minus where it ended before
-        DiffOff = (newCoFOffset + newCoFSize) - (fb.faceDataOffset + fb.faceDataSize)
+        DiffOff = (newIndexStreamOffset + newIndexStreamSize) - (ish.resourceOffset + ish.resourceLength)
+        print(DiffOff)
         # print(DiffOff)
         def AddDiff(pos,diff=DiffOff):
             if pos != 0:
                 w.seek(pos)
-                oldOffset = r.int64(w)
+                oldOffset = r.uint64(w)
                 w.seek(pos)
-                w.write(p.int64(oldOffset+diff))
-        def mdDiff(xmd):
+                w.write(p.uint64(oldOffset + diff))
+        def mdDiff(p_mesh, p_prim):
             # Vertex
-            if xmd.vertexBlock.vertexStream:
-                AddDiff(xmd.vertexBlock.vertexStream.posOffset)
-                # print(objectName,"  Vertex  ",xmd.vertexBlock.vertexStream.posOffset)
+            if p_prim.vertexBlock:
+                AddDiff(p_prim.vertexBlock.vertexStream.streamInfo.offsetPos)
             # Edge
-            if xmd.edgeBlock:
-                AddDiff(xmd.edgeBlock.posOffset)
+            if p_mesh.skinInfo.meshInfos[primIndex].edgeRef.type.name == "Internal":
+                AddDiff(p_mesh.skinInfo.edgeData.dataOffset)
             # Normals
-            if xmd.vertexBlock.normalsStream:
-                AddDiff(xmd.vertexBlock.normalsStream.posOffset)
+            if p_prim.vertexBlock.normalsStream:
+                AddDiff(p_prim.vertexBlock.normalsStream.streamInfo.offsetPos)
             # UV
-            if xmd.vertexBlock.uvStream:
-                AddDiff(xmd.vertexBlock.uvStream.posOffset)
+            if p_prim.vertexBlock.uvStream:
+                AddDiff(p_prim.vertexBlock.uvStream.streamInfo.offsetPos)
             # Faces
-            if xmd.faceBlock:
-                AddDiff(xmd.faceBlock.posOffset)
+            if p_prim.faceBlock:
+                AddDiff(p_prim.faceBlock.indexStream.offsetPos)
 
         #Group are after Objects, so no need to add to objects.
-        if isGroup:
-            # Remaining mesh blocks of current Lod
-            for md in asset.LODGroups[Index].LODList[LODIndex].meshBlockList[BlockIndex + 1:]:
-                mdDiff(md)
+        if isLodMesh:
+            # Remaining primitives of current Lod
+            for prim in asset.LodMeshResources[resIndex].meshList[meshIndex].primitives[primIndex + 1:]:
+                mdDiff(mesh,prim)
             # The following LODs
-            for l in asset.LODGroups[Index].LODList[LODIndex+1:]:
-                for md in l.meshBlockList:
-                    mdDiff(md)
+            for l in asset.LodMeshResources[resIndex].meshList[meshIndex + 1:]:
+                for prim in l.primitives:
+                    mdDiff(l,prim)
             #just in case there are other groups
-            for g in asset.LODGroups[Index+1:]:
-                for l in g.LODList:
-                    for md in l.meshBlockList:
-                        mdDiff(md)
+            for g in asset.LodMeshResources[resIndex + 1:]:
+                for l in g.meshList:
+                    for prim in l.primitives:
+                        mdDiff(l,prim)
 
         else:
             # Remaining mesh blocks of current Lod
-            for md in asset.LODObjects[Index].LODList[LODIndex].meshBlockList[BlockIndex + 1:]:
-                mdDiff(md)
+            for prim in asset.MultiMeshResources[resIndex].meshList[meshIndex].primitives[primIndex + 1:]:
+                mdDiff(mesh,prim)
             # The following LODs
-            for l in asset.LODObjects[Index].LODList[LODIndex + 1:]:
-                for md in l.meshBlockList:
-                    mdDiff(md)
+            for l in asset.MultiMeshResources[resIndex].meshList[meshIndex + 1:]:
+                for prim in l.primitives:
+                    mdDiff(l,prim)
             # the other objects
-            for o in asset.LODObjects[Index + 1:]:
-                for l in o.LODList:
-                    for md in l.meshBlockList:
-                        mdDiff(md)
+            for o in asset.MultiMeshResources[resIndex + 1:]:
+                for l in o.meshList:
+                    for prim in l.primitives:
+                        mdDiff(l,prim)
             # do every md in every lod of every LODGroup
-            for g in asset.LODGroups:
-                for l in g.LODList:
-                    for md in l.meshBlockList:
-                        mdDiff(md)
+            for g in asset.LodMeshResources:
+                for l in g.meshList:
+                    for prim in l.primitives:
+                        mdDiff(l,prim)
     # Delete Source Core
     # if os.path.exists(core + "MOD"):
     #     os.remove(core+"MOD")
@@ -1686,14 +2014,13 @@ def ExportMesh(isGroup,Index,LODIndex,BlockIndex):
     ReadCoreFile()
 
 def SaveDistances(Index):
-    p = BytePacker()
+    p = BytePacker
     HZDEditor = bpy.context.scene.HZDEditor
     core = HZDEditor.HZDAbsPath
 
     with open(core,'rb+') as w:
-        w.seek(asset.LODGroups[Index].blockStartOffset)
-        # print(w.tell())
-        r = ByteReader()
+        w.seek(asset.LodMeshResources[Index].blockStartOffset)
+        r = ByteReader
         w.seek(16, 1)
         r.hashtext(w)
         w.seek(24, 1)
@@ -1701,52 +2028,61 @@ def SaveDistances(Index):
         w.seek(4,1)
         w.seek(16, 1)
         LODCount = r.int32(w)
-        # print(w.tell())
         for i in range(LODCount):
             w.seek(17, 1)
             w.write(p.float(HZDEditor["LodDistance" + str(i)]))
-            # print(w.tell())
 
 
 
 class Asset:
     def __init__(self):
-        self.LODGroups = []
-        self.LODObjects = []
-        self.meshBlocks = []
+        # these are lists just in case, but I haven't seen any asset with more than one of those.
+        self.LodMeshResources = []
+        self.MultiMeshResources = []
+        self.RegularSkinnedMeshResources = []
+        self.StaticMeshResources = []
 
-    # def FindMeshes(self):
-    #     for lg in self.LODGroups:
-    #         for l in lg.LODList:
-    #             for m in l.meshBlockList:
-    #                 self.meshBlocks.append(m)
-    #     for lo in self.LODObjects:
-    #         for l in lo.LODList:
-    #             for m in l.meshBlockList:
-    #                 self.meshBlocks.append(m)
 
-BlockIDs = {"MeshBlockInfo":4980347625154103665,
-            "MeshNameBlock":10982056603708398958,
-            "SkeletonBlock":232082505300933932,
-            "VertexBlock":13522917709279820436,
-            "FaceBlock":12198706699739407665,
-            "ShaderBlock":12029122079492233037,
+BlockIDs = {"RegularSkinnedMeshResource" : 10982056603708398958,
+        "VertexArrayResource" : 13522917709279820436,
+        "SkinnedMeshBoneBindings" : 232082505300933932,
+        "SkinnedMeshBoneBoundingBoxes" : 1425406424293942754,
+        "RegularSkinnedMeshResourceSkinInfo" : 4980347625154103665,
+        "RenderingPrimitiveResource" : 17523037150162385132,
+        "IndexArrayResource" : 12198706699739407665,
+        "RenderEffectResource" : 12029122079492233037,
+        "LodMeshResource" : 6871768592993170868,
+        "ShaderResource" : 5215210673454096253, #was 5215210673454096253 5561636305660569489
+        "TextureResource" : 17501462827539052646,
+        "MultiMeshResource" : 7022335006738406101,
+        "DataBufferResource" : 10234768860597628846,
+        "StaticMeshResource" : 17037430323200133752,
+        "SKDTreeResource" : 13505794420212475061,
+        "SkeletonHelpers" : 6306064744810253771
             }
 asset = Asset()
 
 class DataBlock:
-    def __init__(self,f,expectedID=0):
-        r = ByteReader()
+    def __init__(self,f,expectedID=0,expectedGUID=0):
+        r = ByteReader
 
         self.expectedID = expectedID
-        self.ID = r.int64(f)
+        self.ID = r.uint64(f)
         if expectedID != 0:
             if self.ID != self.expectedID:
                 raise Exception("%s  --  Invalid Block ID: got %d expected %d"%(self.__class__.__name__,self.ID ,self.expectedID))
         self.size = r.int32(f)
         self.blockStartOffset = f.tell()
+        self.guid = r.guid(f)
+        if expectedGUID != 0:
+            self.validateGUID(expectedGUID)
         # print(self.__class__.__name__)
         # print("ID = ",self.ID,"\n","Size = ",self.size,"\nStart = ",self.blockStartOffset)
+    def validateGUID(self,expectedGUID):
+        if self.guid == expectedGUID:
+            return
+        else:
+            raise Exception("%s  --  Invalid Block GUID: got %s expected %s"%(self.__class__.__name__,str(self.guid.hex()) ,str(expectedGUID)))
     def EndBlock(self,f):
         f.seek(self.blockStartOffset + self.size)
 
@@ -1755,7 +2091,7 @@ class TextureAsset:
         self.textures = []
         self.texSet = None
         r = ByteReader
-        ID = r.int64(f)
+        ID = r.uint64(f)
         f.seek(-8,1)
         if ID == 1009496109439982815: #Texture Set
             self.texSet = TextureSet(f)
@@ -1809,7 +2145,6 @@ class TextureSet(DataBlock):
         super().__init__(f)
         r = ByteReader
 
-        f.seek(16, 1)
         self.name = r.hashtext(f)
         self.textureCount = r.int32(f)
         self.textures = [self.TextureDetails(f) for _ in range(self.textureCount)]
@@ -1897,7 +2232,6 @@ class Texture(DataBlock):
     def __init__(self,f):
         super().__init__(f)
         r = ByteReader
-        f.seek(16,1)
         self.name = r.hashtext(f)
         f.seek(2,1)
         width = r.uint16(f)
@@ -1912,12 +2246,11 @@ class Texture(DataBlock):
         self.imageChunkSize= r.int32(f)
         self.thumbnailLength = r.int32(f)
         self.streamSize32 = r.int32(f)
+        self.mipCount = r.int32(f)
         if self.streamSize32 > 0:
-            self.mipCount = r.int32(f)
-            pathLength = r.int32(f)
-            self.streamPath = r.path(f,pathLength) [6:] #remove "cache:"
-            self.streamOffset = r.int64(f)
-            self.streamSize64 = r.int64(f)
+            self.streamPath = r.path(f) [6:] #remove "cache:"
+            self.streamOffset = r.uint64(f)
+            self.streamSize64 = r.uint64(f)
         else:
             padding = self.imageChunkSize - (self.thumbnailLength + 8)
             f.seek(padding,1)
@@ -2010,15 +2343,10 @@ class Bone:
         self.matrix = matrix
 class BoneData:
     def __init__(self,f,matrixCount):
-        self.indexOffset = 0
-        self.matrixOffset = 0
         self.matrixCount = matrixCount
         self.boneList = []
 
-        self.ParseBoneData(f)
-
-    def ParseBoneData(self,f):
-        r = ByteReader()
+        r = ByteReader
         self.indexOffset = f.tell()
         self.matrixOffset = self.indexOffset+(self.matrixCount*2)
         for i in range(self.matrixCount):
@@ -2030,255 +2358,242 @@ class BoneData:
             matrix = Parse4x4Matrix(f)
             self.boneList.append(Bone(matrix,index))
             BoneMatrices[index] = matrix
-class SkeletonBlock(DataBlock):
-    def __init__(self, f):
-        super().__init__(f,232082505300933932)
-        self.matrixCount = 0
-        self.boneData = None
-
-        self.ParseSkeleton(f)
-
-    def ParseSkeleton(self,f):
-        r = ByteReader()
-
-        f.seek(20,1)
-        self.matrixCount = r.int32(f)
+class SkinnedMeshBoneBindings(DataBlock):
+    def __init__(self, f,expectedGuid):
+        super().__init__(f,BlockIDs["SkinnedMeshBoneBindings"],expectedGuid)
+        r = ByteReader
+        self.boneNameCount = r.uint32(f)
+        self.boneNames = []
+        for i in range(self.boneNameCount):
+            self.boneNames.append(r.hashtext(f))
+        self.matrixCount = r.uint32(f)
         self.boneData = BoneData(f,self.matrixCount)
 
         self.EndBlock(f)
+class SkinnedMeshBoneBoundingBoxes(DataBlock):
+    def __init__(self, f,expectedGuid):
+        super().__init__(f,BlockIDs["SkinnedMeshBoneBoundingBoxes"],expectedGuid)
+        r = ByteReader
+        self.boneBoundingBoxesCount = r.uint32(f)
+        self.boneBoundingBoxes = []
+        for i in range(self.boneBoundingBoxesCount):
+            self.boneBoundingBoxes.append(BoundingBox(f))
+        self.indicesCount = r.uint32(f)
+        self.indices = []
+        for i in range(self.indicesCount):
+            self.indices.append(r.uint16(f))
+        self.usesIndices = r.bool(f)
+        self.initialized = r.bool(f)
+        self.EndBlock(f)
 
-class MeshNameBlock(DataBlock):
-    def __init__(self, f):
-        super().__init__(f,10982056603708398958)
-        self.name = ""
-        self.skeletonPath = ""
-
-        self.ParseMeshName(f)
-
-    def ParseMeshName(self,f):
-        r = ByteReader()
-        f.seek(16,1)
-        self.name = r.hashtext(f)
-        f.seek(65,1)
-        self.skeletonPath = r.hashtext(f)
+class DataBufferResource(DataBlock):
+    def __init__(self, f,expectedGuid):
+        super().__init__(f,BlockIDs["DataBufferResource"],expectedGuid)
+        f.seek(20,1)
+        r = ByteReader
+        self.streamRef = r.path(f)
+        self.dataOffset = r.uint64(f)
+        self.datasize = r.uint64(f)
         self.EndBlock(f)
 class MeshInfo:
     def __init__(self,f):
-        r = ByteReader()
-        f.seek(8,1)
-        f.seek(16,1)
+        r = ByteReader
+        f.seek(4,1) #skip SkinInfoTypes
+        f.seek(4,1) #skip SkinVtxTypes
+        f.seek(16,1) #skip BlendShapeMask
         self.posVCount = f.tell()
         self.vertexCount = r.int32(f)
-        f.seek(13,1)
-class MeshBlockInfo(DataBlock):
-    def __init__(self,f):
-        super().__init__(f,4980347625154103665)
-        self.meshBlockCount = 0
+        f.seek(4,1) #skip VertexComputeNbtCount
+        self.edgeRef = Reference(f)
+        f.seek(4,1) #skip VerticesSkinCount
+        f.seek(4,1) #skip VerticesSkinNbtCount
+class RegularSkinnedMeshResourceSkinInfo(DataBlock): # was MeshBlockInfo
+    def __init__(self,f,expectedGuid):
+        super().__init__(f,BlockIDs["RegularSkinnedMeshResourceSkinInfo"],expectedGuid)
+        r = ByteReader
+
+        self.primitiveCount = r.uint32(f)
         self.meshInfos = []
-
-        self.ParseMeshBlockInfo(f)
-
-    def ParseMeshBlockInfo(self,f):
-        r = ByteReader()
-        f.seek(16,1)
-        self.meshBlockCount = r.int32(f)
-        for i in range(self.meshBlockCount):
+        for i in range(self.primitiveCount):
             self.meshInfos.append(MeshInfo(f))
+        #skip BlendTargetDeformation
         self.EndBlock(f)
 
-class StreamRef:
-    def __init__(self,f,blockOffset,blockSize):
-        self.blockOffset = blockOffset
-        self.blockSize = blockSize
-        self.stride = 0
-        self.pathLength = 0
-        self.streamPath = ""
-        self.dataOffset = 0
-        self.dataSize = 0
-        self.posOffset = 0
-        self.posSize = 0
+        for m in self.meshInfos:
+            if m.edgeRef.type.name == "Internal":
+                self.edgeData = DataBufferResource(f,m.edgeRef.guid)
 
-        self.ParseStreamRef(f)
 
-    def ParseStreamRef(self,f):
-        r = ByteReader()
-        f.seek(4,1)
+class StreamHandle:
+    def __init__(self,f,streamStartOffset=0):
+        r = ByteReader
+        self.path = r.path(f)
+        self.offsetPos = f.tell()
+        self.resourceOffset = r.uint64(f)
+        self.lengthPos = f.tell()
+        self.resourceLength = r.uint64(f)
+        self.absOffset = streamStartOffset + self.resourceOffset
+
+class StreamData:
+    class VertexElementDesc:
+        class StorageType(IntEnum):
+            Undefined = 0,
+            SignedShortNormalized = 1,
+            Float = 2,
+            HalfFloat = 3,
+            UnsignedByteNormalized = 4,
+            SignedShort = 5,
+            X10Y10Z10W2Normalized = 6,
+            UnsignedByte = 7,
+            UnsignedShort = 8,
+            UnsignedShortNormalized = 9,
+            UNorm8sRGB = 10,
+            X10Y10Z10W2UNorm = 11
+        class ElementType(IntEnum):
+            Pos = 0,
+            TangentBFlip = 1,
+            Tangent = 2,
+            Binormal = 3,
+            Normal = 4,
+            Color = 5,
+            UV0 = 6,
+            UV1 = 7,
+            UV2 = 8,
+            UV3 = 9,
+            UV4 = 10,
+            UV5 = 11,
+            UV6 = 12,
+            MotionVec = 13,
+            Vec4Byte0 = 14,
+            Vec4Byte1 = 15,
+            BlendWeights = 16,
+            BlendIndices = 17,
+            BlendWeights2 = 18,
+            BlendIndices2 = 19,
+            PivotPoint = 20,
+            AltPos = 21,
+            AltTangent = 22,
+            AltBinormal = 23,
+            AltNormal = 24,
+            AltColor = 25,
+            AltUV0 = 26,
+            Invalid = 27
+        def __init__(self,f):
+            r = ByteReader
+            self.offset = r.uint8(f)
+            storageTypeRead = r.uint8(f)
+            typeValues = [item.value for item in self.StorageType]
+            if storageTypeRead not in typeValues:
+                raise Exception("Storage Type value at offset %d is invalid. Got %d" % (f.tell() - 1, storageTypeRead))
+            else:
+                self.storageType : StreamData.VertexElementDesc.StorageType = self.StorageType(storageTypeRead)
+            self.count = r.uint8(f)
+            elementTypeRead = r.uint8(f)
+            typeValues = [item.value for item in self.ElementType]
+            if elementTypeRead not in typeValues:
+                raise Exception("Storage Type value at offset %d is invalid. Got %d" % (f.tell() - 1, elementTypeRead))
+            else:
+                self.elementType : StreamData.VertexElementDesc.ElementType = self.ElementType(elementTypeRead)
+        def __str__(self):
+            return "Offset: %d - StorageType %s - Count %d - ElementType %s"%(self.offset,self.storageType.name,self.count,self.elementType.name)
+
+    def __init__(self,f,inStream,elementCount,streamStartOffset):
+        r = ByteReader
+        f.seek(4,1) #skip Flags
         self.stride = r.int32(f)
-        unknownCount = r.int32(f)
-        f.seek(16,1)
-        # print(unknownCount)
-        for i in range(unknownCount):
-            f.seek(4,1)
-        self.pathLength = r.int32(f)
-        if 12 >= self.pathLength > 2000: # kinda arbitrary numbers, was easier to put 2000 than getting file size.
-            f.seek(self.blockOffset+self.blockSize)
+        self.elementInfoCount = r.int32(f)
+        self.elementInfo = []
+        for i in range(self.elementInfoCount):
+            self.elementInfo.append(self.VertexElementDesc(f))
+        f.seek(16,1) #skip GUID
+        if inStream:
+            self.streamInfo = StreamHandle(f,streamStartOffset)
+            self.streamLength = self.streamInfo.resourceLength
+            self.streamAbsOffset = self.streamInfo.absOffset
         else:
-            self.streamPath = r.path(f,self.pathLength)
-            self.posOffset = f.tell()
-            self.dataOffset = r.int64(f)
-            self.posSize = f.tell()
-            self.dataSize = r.int64(f)
+            self.streamLength = self.stride * elementCount
+            self.streamAbsOffset = f.tell()
+            f.seek(self.streamLength,1)
 
-class EdgeBlock(DataBlock):
+    def __str__(self):
+        s = "\n'''''StreamData - Stride: %d  |  StreamLength: %d  |  StreamAbsOffset: %d"%(self.stride,self.streamLength,self.streamAbsOffset)
+        for e in self.elementInfo:
+            s += "\n''''''Element : " + e.__str__()
+        return s
+class Reference:
+    class ReferenceType(IntEnum):
+        Null = 0,
+        Internal = 1,
+        External = 2,
+        Streaming = 3,
+        UUID = 4
     def __init__(self,f):
-        super().__init__(f)
-        self.streamPath = ""
-        self.EdgeDataOffset = 0
-        self.posOffset = 0
-        self.EdgeDataSize = 0
-        self.posSize = 0
+        r = ByteReader
+        typeRead = r.uint8(f)
+        typeValues = [item.value for item in Reference.ReferenceType]
+        if typeRead not in typeValues:
+            raise Exception("Reference Type value at offset %d is invalid. Got %d"%(f.tell()-1,typeRead))
+        else:
+            self.type : Reference.ReferenceType = self.ReferenceType(typeRead)
+            if self.type != 0:
+                self.guid = r.guid(f)
+                if self.type.name == "External":
+                    self.externalFile = r.hashtext(f)
 
-        self.ParseEdgeBlock(f)
-
-    def ParseEdgeBlock(self,f):
-        r = ByteReader()
-        f.seek(36,1)
-        pathLength = r.int32(f)
-        self.streamPath = r.path(f,pathLength)
-        self.EdgeDataOffset = r.int64(f)
-        self.EdgeDataSize = r.int64(f)
-        self.EndBlock(f)
-class StuffBlock(DataBlock):
-    def __init__(self,f):
-        super().__init__(f)
-        self.faceIndexCount = 0
-        self.posOffset = 0
-
-        self.ParseBlock(f)
-
-    def ParseBlock(self,f):
-        r = ByteReader()
-        f.seek(87,1)
-        self.posOffset = f.tell()
-        self.faceIndexCount = r.int64(f)
-        self.EndBlock(f)
-class VertexBlock(DataBlock):
-    def __init__(self,f):
-        super().__init__(f,13522917709279820436)
-        self.vertexCount = 0
-
-        self.streamRefCount = 0
-        self.inStream = True
-        self.vertexStream = None
-        self.normalsStream = None
-        self.uvStream = None
-        self.realOffsets = False
-        self.hasVertexColor = False
-        self.hasTwoUV = False
-        self.coHalf = False #vertex coordinate stored as 16bit float
-
-        #The positions at which the values are found
-        self.posVCount = 0
-
-
-        self.ParseVertexBlock(f)
-        if self.inStream:
-            self.CheckCoHalf()
-        self.EndBlock(f)
-
-    def ParseVertexBlock(self,f):
-        r = ByteReader()
-        f.seek(16,1)
+class VertexArrayResource(DataBlock):
+    def __init__(self,f,expectedGuid):
+        super().__init__(f,BlockIDs["VertexArrayResource"],expectedGuid)
+        r = ByteReader
         self.posVCount = f.tell()
-        self.vertexCount = r.int32(f)
-        self.streamRefCount = r.int32(f)
+        self.vertexCount = r.uint32(f)
+        self.streamRefCount = r.uint32(f)
         self.inStream = r.bool(f)
-        # print(self.vertexCount,self.streamRefCount,self.inStream)
-        if self.inStream:
-            self.vertexStream = StreamRef(f,self.blockStartOffset,self.size)
-
-            if self.streamRefCount == 3:
-                self.normalsStream = StreamRef(f,self.blockStartOffset,self.size)
-                self.uvStream = StreamRef(f,self.blockStartOffset,self.size)
-            else:
-                self.uvStream = StreamRef(f,self.blockStartOffset,self.size)
-
-        if self.inStream:
-            if self.normalsStream:
-                self.realOffsets = self.vertexStream.dataOffset != self.normalsStream.dataOffset
-            else:
-                self.realOffsets = self.vertexStream.dataOffset != self.uvStream.dataOffset
-            self.hasVertexColor = self.vertexCount * 8 < self.uvStream.dataSize
-            self.hasTwoUV =self.vertexCount * 12 <= self.uvStream.dataSize
-
-
-    def CheckCoHalf(self):
-        vOffset = self.vertexStream.dataOffset
-        HZDEditor = bpy.context.scene.HZDEditor
-        core = HZDEditor.HZDAbsPath
-        stream = core+".stream"
-
-        s = open(stream,'rb')
-        s.seek(vOffset)
-        s.seek(6,1)
-        if s.read(2) == b'\x00\x3C':
-            self.coHalf = True
+        streamStartOffset = 0
+        self.vertexStream = StreamData(f,self.inStream,self.vertexCount,streamStartOffset)
+        streamStartOffset += self.vertexStream.streamLength
+        if self.streamRefCount == 3:
+            self.normalsStream = StreamData(f,self.inStream,self.vertexCount,streamStartOffset)
+            streamStartOffset += self.normalsStream.streamLength
+            self.uvStream = StreamData(f, self.inStream, self.vertexCount,streamStartOffset)
         else:
-            self.coHalf = False
-        s.close()
-class FaceBlock(DataBlock):
-    def __init__(self,f):
-        super().__init__(f,12198706699739407665)
-        self.indexCount = 0
-        self.posIndexCount = 0
-        self.inStream = True
-        self.pathLength = 0
-        self.streamPath = ""
-        self.faceDataOffset = 0
-        self.faceDataSize = 0
-        self.posOffset = 0
-        self.posSize = 0
+            self.normalsStream = None
+            self.uvStream = StreamData(f, self.inStream, self.vertexCount, streamStartOffset)
 
-        self.ParseFaceBlock(f)
-
-    def ParseFaceBlock(self,f):
-        r = ByteReader()
-        f.seek(16, 1)
+        self.EndBlock(f)
+    def __str__(self):
+        s = "\n--VertexArrayResource"
+        s += "\n'''Vertex Count = %d  |  inStream = %s"%(self.vertexCount,str(self.inStream))
+        s += "\n----VertexStream " + self.vertexStream.__str__()
+        if self.normalsStream:
+            s += "\n----NormalsStream " + self.normalsStream.__str__()
+        s += "\n----UVStream " + self.uvStream.__str__()
+        return s
+class IndexArrayResource(DataBlock):
+    def __init__(self,f,expectedGuid):
+        super().__init__(f,BlockIDs["IndexArrayResource"],expectedGuid)
+        r = ByteReader
         self.posIndexCount = f.tell()
         self.indexCount = r.int32(f)
-        f.seek(8,1)
+        f.seek(4,1) #skip Flags
+        self.indexFormat = r.uint32(f) #0 = 16bit, 1 = 32bit
         self.inStream = r.bool(f)
         f.seek(3,1)
-        f.seek(16,1)
+        f.seek(16,1) #skip GUID
         if self.inStream:
-            self.pathLength = r.int32(f)
-            if 12 >= self.pathLength > 2000:  # kinda arbitrary numbers, was easier to put 2000 than getting file size.
-                f.seek(self.blockStartOffset + self.size)
+            self.indexStream = StreamHandle(f)
+        else:
+            if self.indexFormat == 0:
+                formatStride = 16
             else:
-                self.streamPath = r.path(f, self.pathLength)
-                self.posOffset = f.tell()
-                self.faceDataOffset = r.int64(f)
-                self.posSize = f.tell()
-                self.faceDataSize = r.int64(f)
+                formatStride = 32
+            f.seek(formatStride * self.indexCount,1) #skip
         self.EndBlock(f)
-
-class MeshDataBlock:
-    def __init__(self,f):
-        self.edgeBlock = None
-        self.stuffBlock = None
-        self.vertexBlock = None
-        self.faceBlock = None
-
-        self.ReadMeshBlock(f)
-
-    def ReadMeshBlock(self,f):
-        r = ByteReader()
-        # print(f.tell())
-        IDCheck = r.int64(f)
-        # print(f.tell())
-        f.seek(-8,1)
-        # print(f.tell())
-        if IDCheck == 10234768860597628846:
-            self.edgeBlock = EdgeBlock(f)
-        self.stuffBlock = StuffBlock(f)
-        self.vertexBlock = VertexBlock(f)
-        self.faceBlock = FaceBlock(f)
 
 class TextureRef():
     def __init__(self,f):
         self.texPath = ""
 
-        r = ByteReader()
+        r = ByteReader
         f.seek(16,1)
         indicator = r.int8(f)
         f.seek(16,1)
@@ -2286,168 +2601,362 @@ class TextureRef():
             self.texPath = r.hashtext(f)
         f.seek(16,1)
 
-class ShaderBlockInfo():
+class RenderTechnique:
+    class RenderTechniqueState:
+        def __init__(self,f):
+            f.seek(8,1) #skip PackedData/DepthBias/ColorMask
+    class SRTBindingCache:
+        def __init__(self,f):
+            r = ByteReader
+            f.seek(1,1) #skip TextureBindingMask
+            f.seek(2,1) #skip BindingDataMask
+            f.seek(8,1) #skip SRTEntriesMask
+            indicesCount = r.uint32(f)
+            f.seek(indicesCount*2,1) #skip BindingDataIndices
+            handlesCount = r.uint32(f)
+            f.seek(handlesCount*8,1) #skip HwBindingHandle
+    class ShaderSamplerBinding:
+        def __init__(self,f):
+            f.seek(4,1) #skip BindingNameHash
+            f.seek(4,1) #skip SamplerData
+            f.seek(8,1) #skip SamplerBindingHandle
+    class ShaderTextureBinding:
+        def __init__(self,f):
+            r = ByteReader
+            f.seek(16,1) #skip BindingNameHash, BindingSwizzleNameHash, SamplerNameHash, PackedData uint32s
+            self.textureResource = Reference(f)
+            f.seek(16,1) #skip BindingHandles
+    class ShaderVariableBinding:
+        def __init__(self,f):
+            r = ByteReader
+            f.seek(8,1) #skip BindingNameHash, VariableIDHash
+            f.seek(1,1) #skip VariableType
+            f.seek(16,1) #skip VariableData
+            f.seek(8,1) #skip VarBindingHandle
+
     def __init__(self,f):
-        self.textureRefs = []
-
-        self.ParseShaderInfo(f)
-
-    def ParseShaderInfo(self,f):
-        r = ByteReader()
-        f.seek(19,1)
-        bCount = r.int32(f)
-        for b in range(bCount):
-            f.seek(2,1)
-        cCount = r.int32(f)
-        for c in range(cCount):
-            f.seek(8,1)
-        f.seek(23,1)
-        texRefCount = r.int32(f)
-        for tex in range(texRefCount):
-            self.textureRefs.append(TextureRef(f))
-        gCount = r.int32(f)
-        for g in range(gCount):
-            f.seek(9,1)
-            f.seek(16,1)
-            f.seek(8,1)
-        f.seek(25,1)
-
-class MaterialBlock(DataBlock):
+        r = ByteReader
+        self.RenderTechniqueState(f)
+        self.SRTBindingCache(f)
+        f.seek(4,1) #skip Technique Type
+        f.seek(8,1) #skip WorldDataBindingMask
+        f.seek(3,1) #skip bools GPUSkinned, WriteGlobalVertexCache, InitiallyEnabled
+        f.seek(4,1) #skip MaterialLayerID
+        samplerCount = r.uint32(f)
+        for i in range(samplerCount):
+            self.ShaderSamplerBinding(f)
+        self.texCount = r.uint32(f)
+        self.shaderTextureBindings = []
+        self.textureBlockCount = 0
+        for i in range(self.texCount):
+            stb = self.ShaderTextureBinding(f)
+            if stb.textureResource.type.name == "Internal":
+                self.textureBlockCount += 1  # we use this to find color ramp textures among the shader blocks
+            self.shaderTextureBindings.append(stb)
+        self.varCount = r.uint32(f)
+        for i in range(self.varCount):
+            self.ShaderVariableBinding(f)
+        self.shaderRef = Reference(f)
+        f.seek(8,1) #skip ID
+class RenderTechniqueSet:
     def __init__(self,f):
-        super().__init__(f,12029122079492233037)
+        r = ByteReader
+        self.techniquesCount = r.uint32(f)
+        self.renderTechniques = []
+        for i in range(self.techniquesCount):
+            self.renderTechniques.append(RenderTechnique(f))
+        f.seek(4,1) #skip TechniqueSetType
+        f.seek(4,1) #skip RenderEffectType
+        f.seek(8,1) #skip TechniquesMask variables
+class ShaderResource(DataBlock):
+    def __init__(self,f,expectedGuid):
+        super().__init__(f,BlockIDs["ShaderResource"],expectedGuid)
+        #skip everything
+        self.EndBlock(f)
+class RenderEffectResource(DataBlock):
+    def __init__(self,f,expectedGuid):
+        super().__init__(f,BlockIDs["RenderEffectResource"],expectedGuid)
         self.shaderName = ""
-        self.subshaderCount = 0
-        self.shaderBlockInfos = []
         self.ui_ShowTextures = False
         self.uniqueTextures = []
 
-        self.ParseMaterialBlock(f)
+        r = ByteReader
+        self.shaderName = r.hashtext(f)
+        self.techniqueSetsCount = r.uint32(f)
+        self.techniqueSets = []
+        for i in range(self.techniqueSetsCount):
+            self.techniqueSets.append(RenderTechniqueSet(f))
+        f.seek(8,1) #skip SortMode and SortOrder
+        f.seek(4,1) #skip EffectType
+        f.seek(1,1) #skip MakeAccumulationBufferCopy
+        f.seek(4,1) #skip VertexElementSet
+
+        self.EndBlock(f)
+        textureGUIDs = []
+        for ts in self.techniqueSets:
+            for tr in ts.renderTechniques:
+                ShaderResource(f,tr.shaderRef.guid)
+                for tbc in tr.shaderTextureBindings:
+                    if tbc.textureResource.type.name == 'Internal':
+                        if tbc.textureResource.guid not in textureGUIDs:
+                            t = DataBlock(f, BlockIDs["TextureResource"],tbc.textureResource.guid)  # TODO skipping internal texture for now
+                            textureGUIDs.append(t.guid)
+                            t.EndBlock(f)
+
         self.GetUniqueTexturesOfMatIndex()
 
-    def ParseMaterialBlock(self,f):
-        r = ByteReader()
-        f.seek(16,1)
-        self.shaderName = r.hashtext(f)
-        f.seek(4,1)
-        self.subshaderCount = r.int32(f)
-        for s in range(self.subshaderCount):
-            self.shaderBlockInfos.append(ShaderBlockInfo(f))
+    def GetUniqueTexturesOfMatIndex(self):
+        for ts in self.techniqueSets:
+            for tr in ts.renderTechniques:
+                for tb in tr.shaderTextureBindings:
+                    if tb.textureResource.type.name == "External":
+                        if tb.textureResource.externalFile not in self.uniqueTextures:
+                            self.uniqueTextures.append(tb.textureResource.externalFile)
+        return self.uniqueTextures
+
+class RenderingPrimitiveResource(DataBlock):
+    def __init__(self, f,expectedGuid):
+        super().__init__(f, BlockIDs["RenderingPrimitiveResource"],expectedGuid)
+        r = ByteReader
+
+        f.seek(4,1) #skip Flags
+        self.vertexRef = Reference(f)
+        self.indexRef = Reference(f)
+        self.boxExtents = BoundingBox(f)
+        self.indexOffset = r.int32(f)
+        self.skdTreeRef = Reference(f)
+        self.startIndex = r.int32(f)
+        self.posIndexCount = f.tell()
+        self.endIndex = r.int32(f) #Index Count ( tris count / 3)
+        f.seek(4,1) #skip hash
+        self.renderEffectRef = Reference(f)
 
         self.EndBlock(f)
 
-    def GetUniqueTexturesOfMatIndex(self):
-        for info in self.shaderBlockInfos:
-            for tr in info.textureRefs:
-                tp = tr.texPath
-                if tp != "":
-                    if tp not in self.uniqueTextures:
-                        self.uniqueTextures.append(tp)
-        return self.uniqueTextures
+        if self.vertexRef.type != 0:
+            self.vertexBlock = VertexArrayResource(f,self.vertexRef.guid)
+        if self.indexRef.type != 0:
+            self.faceBlock = IndexArrayResource(f,self.indexRef.guid)
+        if self.skdTreeRef.type != 0:
+            self.skdTreeResource = DataBlock(f,BlockIDs["SKDTreeResource"],self.skdTreeRef.guid) #ignore SKDT
+            self.skdTreeResource.EndBlock(f)
+        if self.renderEffectRef.type != 0:
+            self.renderEffectResource = RenderEffectResource(f,self.renderEffectRef.guid)
+    def __str__(self):
 
-class LOD:
+        return "PRIMITIVE" + self.vertexBlock.__str__()
+
+class StaticMeshResource(DataBlock):
+    def __init__(self,f,expectedGuid=0):
+        super().__init__(f,BlockIDs["StaticMeshResource"],expectedGuid)
+        r = ByteReader
+
+        self.meshName = r.hashtext(f)
+        self.meshBase = MeshResourceBase(f)
+        f.seek(4,1) #skip DrawFlags
+        self.primitiveCount = r.uint32(f)
+        self.primitiveRefs = []
+        for i in range(self.primitiveCount):
+            self.primitiveRefs.append(Reference(f))
+        self.materialCount = r.int32(f)
+        self.materialRefs = []
+        for i in range(self.materialCount):
+            self.materialRefs.append(Reference(f))
+        self.SkeletonHelpersRef = Reference(f)
+        #skip SimulationInfoRef
+        #skip Bool SupportsInstanceRendering
+        self.EndBlock(f)
+
+        self.primitives = []
+        for pf in self.primitiveRefs:
+            self.primitives.append(RenderingPrimitiveResource(f, pf.guid))
+
+class RegularSkinnedMeshResource(DataBlock):
+    def __init__(self, f,expectedGuid=0):
+        super().__init__(f,BlockIDs["RegularSkinnedMeshResource"],expectedGuid)
+        r = ByteReader
+
+        self.meshName = r.hashtext(f)
+        self.meshBase = MeshResourceBase(f)
+        self.skeletonRef = Reference(f)
+        self.SkeletonHelpersRef = Reference(f)
+        f.seek(8,1) #skip DrawFlags
+        self.boneBindingsRef = Reference(f)
+        self.boneBoundingBoxesRef = Reference(f)
+        self.positionBoundsScale = r.vector3(f)
+        self.positionBoundsOffset = r.vector3(f)
+        self.skinInfoRef = Reference(f)
+        self.primitiveCount = r.uint32(f)
+        self.primitiveRefs = []
+        for i in range(self.primitiveCount):
+            self.primitiveRefs.append(Reference(f))
+        self.materialCount = r.int32(f)
+        self.materialRefs = []
+        for i in range(self.materialCount):
+            self.materialRefs.append(Reference(f))
+
+        self.EndBlock(f)
+
+        self.boneBindings = SkinnedMeshBoneBindings(f,self.boneBindingsRef.guid)
+        self.boneBoundingBoxes = SkinnedMeshBoneBoundingBoxes(f,self.boneBoundingBoxesRef.guid)
+        self.skinInfo = RegularSkinnedMeshResourceSkinInfo(f,self.skinInfoRef.guid)
+
+        self.primitives = []
+        for pf in self.primitiveRefs:
+            self.primitives.append(RenderingPrimitiveResource(f,pf.guid))
+
+        self.materials = []
+        for mr in self.materialRefs:
+            self.materials.append(RenderEffectResource(f,mr.guid))
+
+class BoundingBox:
     def __init__(self,f):
-        self.meshNameBlock = MeshNameBlock(f)
-        self.skeletonBlock = SkeletonBlock(f)
-        self.unknownBlock = DataBlock(f)
-        self.unknownBlock.EndBlock(f)
-        self.meshBlockInfo = MeshBlockInfo(f)
-        self.meshBlockList = []
-        self.materialBlockList = []
+        r = ByteReader
+        self.minExtent = r.vector3(f)
+        self.maxExtent = r.vector3(f)
+class Transform:
+    class RotationMatrix:
+        def __init__(self,f):
+            r = ByteReader
+            self.Col1 = r.vector3(f)
+            self.Col2 = r.vector3(f)
+            self.Col3 = r.vector3(f)
+    class WorldPosition:
+        def __init__(self,f):
+            r = ByteReader
+            self.pos = r.dvector3(f)
+    def __init__(self,f):
+        self.rotationMatrix = self.RotationMatrix(f)
+        self.worldPosition = self.WorldPosition(f)
+class CullInfo:
+    class MeshType(IntEnum):
+        RegularSkinnedMesh = 32,
+        StaticMesh = -32
+    def __init__(self,f):
+        r = ByteReader
+        typeRead = r.int8(f)
+        if typeRead == -32 or typeRead == 32:
+            self.meshType = self.MeshType(typeRead)
+        elif typeRead == 0:
+            self.meshType = self.MeshType(32)
+            pass #it's fine I guess
+        else:
+            raise Exception("Mesh Type is invalid, expected -32 or 32, got %d at offset %d"%(typeRead,f.tell()-1))
+        f.seek(3,1)
+class MeshHierarchyInfo:
+    def __init__(self,f):
+        r = ByteReader
+        self.MITNodeSize = r.uint32(f)
+        self.primitiveCount = r.uint32(f)
+        self.meshCount = r.uint16(f)
+        self.staticMeshCount = r.uint16(f)
+        self.lodMeshCount = r.uint16(f)
+        self.packedData = r.uint16(f)
+class MeshResourceBase:
+    def __init__(self,f):
+        self.boundingBox = BoundingBox(f)
+        self.drawableCullInfo = CullInfo(f)
+        self.meshHierarchyInfo = MeshHierarchyInfo(f)
+        f.seek(4,1) #skip StaticDataBlockSize
 
 
-        for i in range(self.meshBlockInfo.meshBlockCount):
-            self.meshBlockList.append(MeshDataBlock(f))
-        for i in range(self.meshBlockInfo.meshBlockCount):
-            material = MaterialBlock(f)
-            c = 0
-            while c < material.subshaderCount:
-                db = DataBlock(f)
-                if db.ID == 17501462827539052646: #Color Ramp
-                    pass
-                else:
-                    c = c+1
-                db.EndBlock(f)
-            self.materialBlockList.append(material)
-
-
-class LODGroup(DataBlock):
+class LodMeshResource(DataBlock): # was LODGroup
     def __init__(self, f):
         super().__init__(f)
         self.objectName = ""
         self.totalMeshCount = 0
-        self.LODCount = 0
         self.LODList = []
-        self.LODDistanceList = []
 
-        self.ParseLODGroupInfo(f)
 
-    def ParseLODGroupInfo(self,f):
-        r = ByteReader()
+        r = ByteReader
         HZDEditor = bpy.context.scene.HZDEditor
-        f.seek(16,1)
         self.objectName = r.hashtext(f)
-        f.seek(24,1)
-        f.seek(8,1)
-        self.totalMeshCount = r.int32(f)
-        f.seek(16,1)
-        self.LODCount = r.int32(f)
-        for i in range(self.LODCount):
-            f.seek(17,1)
+        self.meshBase = MeshResourceBase(f)
+        f.seek(4,1) #skip MaxDistance
+        self.meshCount = r.int32(f)
+        self.meshRefs = []
+        self.LODDistanceList = []
+        for i in range(self.meshCount):
+            self.meshRefs.append(Reference(f))
             lodDistance = r.float(f)
             HZDEditor["LodDistance" + str(i)] = lodDistance
             self.LODDistanceList.append(lodDistance)
 
         self.EndBlock(f)
-        for i in range(self.LODCount- len(asset.LODObjects)):
-            lod = LOD(f)
-            self.LODList.append(lod)
-class LODObject(DataBlock):
+
+        self.meshList = []
+        if len(asset.MultiMeshResources) != 0:
+            multiMeshGuid = asset.MultiMeshResources[0].guid
+        else:
+            multiMeshGuid = 0
+        for rp in self.meshRefs:
+            if rp.guid != multiMeshGuid:
+                if self.meshBase.drawableCullInfo.meshType == 32:
+                    self.meshList.append(RegularSkinnedMeshResource(f, expectedGuid=rp.guid))
+                elif self.meshBase.drawableCullInfo.meshType == -32:
+                    self.meshList.append(StaticMeshResource(f, expectedGuid=rp.guid))
+class MultiMeshResource(DataBlock): # was LODObject
+    class ResourcePart:
+        def __init__(self,f):
+            self.meshRef = Reference(f)
+            self.transform = Transform(f)
     def __init__(self, f):
-        super().__init__(f)
-        self.objectName = ""
-        self.totalMeshCount = 0
-        self.LODCount = 0
-        self.LODList = []
+        super().__init__(f,BlockIDs["MultiMeshResource"])
+        r = ByteReader
 
-        self.ParseLODObjectInfo(f)
-
-    def ParseLODObjectInfo(self,f):
-        r = ByteReader()
-        f.seek(16,1)
         self.objectName = r.hashtext(f)
-        f.seek(24,1)
-        f.seek(8,1)
-        self.totalMeshCount = r.int32(f)
-        f.seek(12,1)
-        self.LODCount = r.int32(f)
+        self.meshBase = MeshResourceBase(f)
+        self.meshCount = r.int32(f)
+        self.meshRefs = []
+        for i in range(self.meshCount):
+            self.meshRefs.append(self.ResourcePart(f))
+
         self.EndBlock(f)
-        print(self.objectName,self.totalMeshCount,self.LODCount)
 
-        for i in range(self.LODCount):
-            lod = LOD(f)
-            self.LODList.append(lod)
-            # print("LOD", i,self.LODCount)
+        self.meshList = []
+        for rp in self.meshRefs:
+            if self.meshBase.drawableCullInfo.meshType == 32:
+                self.meshList.append(RegularSkinnedMeshResource(f,expectedGuid=rp.meshRef.guid))
+            elif self.meshBase.drawableCullInfo.meshType == -32:
+                self.meshList.append(StaticMeshResource(f,expectedGuid=rp.meshRef.guid))
 
-
+def ImportAllMeshes(maxLod = 99):
+    for mmi, lm in enumerate(asset.MultiMeshResources):
+        for mi, m in enumerate(lm.meshList):
+            if mi <= maxLod:
+                for pi, p in enumerate(m.primitives):
+                    ImportMesh(False, mmi, mi, pi)
+    for lmi, lm in enumerate(asset.LodMeshResources):
+        for mi, m in enumerate(lm.meshList):
+            if mi <= maxLod:
+                for pi, p in enumerate(m.primitives):
+                    ImportMesh(True, lmi, mi, pi)
 def ReadCoreFile():
-    r = ByteReader()
+    r = ByteReader
     HZDEditor = bpy.context.scene.HZDEditor
-    core = HZDEditor.HZDAbsPath
-    coresize = os.path.getsize(core)
-
     global asset
     asset = Asset()
 
+    core = Path(HZDEditor.HZDAbsPath)
+    coresize = os.path.getsize(core)
     with open(core, "rb") as f:
         while f.tell() < coresize:
             # print(f.tell(),coresize)
-            ID = r.int64(f)
+            ID = r.uint64(f)
             f.seek(-8,1)
             # print(ID)
-            if ID == 6871768592993170868: # LOD Group Info
-                asset.LODGroups.append(LODGroup(f))
-            elif ID == 7022335006738406101: # LOD Object Info
-                asset.LODObjects.append(LODObject(f))
+            if ID == BlockIDs["LodMeshResource"]: # LodMeshResource
+                asset.LodMeshResources.append(LodMeshResource(f))
+            elif ID == BlockIDs["MultiMeshResource"]: # MultiMeshResource
+                asset.MultiMeshResources.append(MultiMeshResource(f))
+            elif ID == BlockIDs["RegularSkinnedMeshResource"]: # RegularSkinnedMeshResource
+                asset.RegularSkinnedMeshResources.append(RegularSkinnedMeshResource(f))
+            elif ID == BlockIDs["StaticMeshResource"]: # StaticMeshResource
+                asset.StaticMeshResources.append(StaticMeshResource(f))
+            else:
+                raise Exception("This file is not supported.",ID)
+            #TODO need support for RegularSkinnedMeshResources that are not part of a Lod or MultiMesh
+            #W:\HorizonModding\Extract\models\characters\robots\horse\animation\parts\firesheets.core
 
 class SearchForOffsets(bpy.types.Operator):
     """Searches the .core file for offsets and sizes"""
@@ -2455,7 +2964,37 @@ class SearchForOffsets(bpy.types.Operator):
     bl_label = "Search Data"
 
     def execute(self,context):
-        ReadCoreFile()
+        HZDEditor = bpy.context.scene.HZDEditor
+
+        # TODO this shouldn't be in here
+        HZDEditor.HZDPath = HZDEditor.HZDPath.strip('\"')
+        HZDEditor.GamePath = HZDEditor.GamePath.strip('\"')
+        HZDEditor.WorkPath = HZDEditor.WorkPath.strip('\"')
+        HZDEditor.SkeletonPath = HZDEditor.SkeletonPath.strip('\"')
+        core = Path(HZDEditor.HZDAbsPath)
+
+        if core.is_dir():
+            print("Path is a folder, attempting to import every mesh found in: \n", core)
+            coreFiles = []
+            glob = core.glob('**/*.core')
+            if glob:
+                print("FILES FOUND: ")
+                for c in glob:
+                    print(c)
+                    coreFiles.append(c)
+                print("\n\n")
+            else:
+                raise Exception("No .core file found in: ", core)
+
+            if coreFiles:
+                print("IMPORTING FILES: ")
+                for c in coreFiles:
+                    HZDEditor.HZDPath = str(c)
+                    ReadCoreFile()
+                    ImportAllMeshes(0)
+
+        else:
+            ReadCoreFile()
         return{'FINISHED'}
 class ExtractHZDAsset(bpy.types.Operator):
     """Extract Asset directly from Horizon .bin files"""
@@ -2473,6 +3012,7 @@ class ImportAll(bpy.types.Operator):
     bl_label = "Import All"
 
     def execute(self,context):
+        ImportAllMeshes()
         return {'FINISHED'}
 
 class ImportHZD(bpy.types.Operator):
@@ -2480,32 +3020,32 @@ class ImportHZD(bpy.types.Operator):
     bl_idname = "object.import_hzd"
     bl_label = ""
 
-    isGroup: bpy.props.BoolProperty()
-    Index: bpy.props.IntProperty()
-    LODIndex: bpy.props.IntProperty()
-    BlockIndex: bpy.props.IntProperty()
+    isSingular: bpy.props.BoolProperty() # if singular mesh there is no LodMesh or MultiMesh
+    isLodMesh: bpy.props.BoolProperty() # is LodMeshResource, else it's a MultiMeshResource
+    resourceIndex: bpy.props.IntProperty() # within the resource array, which is it (usually 0)
+    meshIndex: bpy.props.IntProperty() # within the meshList of Resource, which is it (this points to either RegularSkinnedMeshResource or StaticMeshResource)
+    primitiveIndex: bpy.props.IntProperty() # within the Static or Skinned mesh resource, which Primitive is it?
 
 
     def execute(self, context):
-        ImportMesh(self.isGroup,self.Index,self.LODIndex,self.BlockIndex)
+        ImportMesh(self.isLodMesh,self.resourceIndex,self.meshIndex,self.primitiveIndex)
         return {'FINISHED'}
 class ImportLodHZD(bpy.types.Operator):
     """Imports every mesh in the LOD"""
     bl_idname = "object.import_lod_hzd"
     bl_label = "Import"
 
-    isGroup: bpy.props.BoolProperty()
-    Index: bpy.props.IntProperty()
-    LODIndex: bpy.props.IntProperty()
-
-
+    isLodMesh: bpy.props.BoolProperty()  # is LodMeshResource, else it's a MultiMeshResource
+    resourceIndex: bpy.props.IntProperty()  # within the resource array, which is it (usually 0)
+    meshIndex: bpy.props.IntProperty()  # within the meshList of Resource, which is it (this points to either RegularSkinnedMeshResource or StaticMeshResource)
+    # dont care about primitive index, we want them all
     def execute(self, context):
-        if self.isGroup:
-            for blockindex,block in enumerate(asset.LODGroups[self.Index].LODList[self.LODIndex].meshBlockList):
-                ImportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+        if self.isLodMesh:
+            for primitiveIndex,primitive in enumerate(asset.LodMeshResources[self.resourceIndex].meshList[self.meshIndex].primitives):
+                ImportMesh(self.isLodMesh,self.resourceIndex,self.meshIndex,primitiveIndex)
         else:
-            for blockindex,block in enumerate(asset.LODObjects[self.Index].LODList[self.LODIndex].meshBlockList):
-                ImportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+            for primitiveIndex, primitive in enumerate(asset.MultiMeshResources[self.resourceIndex].meshList[self.meshIndex].primitives):
+                ImportMesh(self.isLodMesh, self.resourceIndex, self.meshIndex, primitiveIndex)
         return {'FINISHED'}
 class ImportSkeleton(bpy.types.Operator):
     """Creates a skeleton"""
@@ -2520,33 +3060,33 @@ class ExportHZD(bpy.types.Operator):
     bl_idname = "object.export_hzd"
     bl_label = ""
 
-    isGroup: bpy.props.BoolProperty()
-    Index: bpy.props.IntProperty()
-    LODIndex: bpy.props.IntProperty()
-    BlockIndex: bpy.props.IntProperty()
+    isLodMesh: bpy.props.BoolProperty()
+    resourceIndex: bpy.props.IntProperty()
+    meshIndex: bpy.props.IntProperty()
+    primitiveIndex: bpy.props.IntProperty()
 
     def execute(self, context):
-        ExportMesh(self.isGroup,self.Index,self.LODIndex,self.BlockIndex)
+        ExportMesh(self.isLodMesh,self.resourceIndex,self.meshIndex,self.primitiveIndex)
         return {'FINISHED'}
 class ExportLodHZD(bpy.types.Operator):
     """Exports every mesh in the LOD"""
     bl_idname = "object.export_lod_hzd"
     bl_label = "Export"
 
-    isGroup: bpy.props.BoolProperty()
-    Index: bpy.props.IntProperty()
-    LODIndex: bpy.props.IntProperty()
+    isLodMesh: bpy.props.BoolProperty()
+    resourceIndex: bpy.props.IntProperty()
+    meshIndex: bpy.props.IntProperty()
 
 
     def execute(self, context):
-        if self.isGroup:
-            for blockindex,block in enumerate(asset.LODGroups[self.Index].LODList[self.LODIndex].meshBlockList):
-                ExportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+        if self.isLodMesh:
+            for primitiveIndex,primitive in enumerate(asset.LodMeshResources[self.resourceIndex].meshList[self.meshIndex].primitives):
+                ExportMesh(self.isLodMesh,self.resourceIndex,self.meshIndex,primitiveIndex)
                 ReadCoreFile()
 
         else:
-            for blockindex,block in enumerate(asset.LODObjects[self.Index].LODList[self.LODIndex].meshBlockList):
-                ExportMesh(self.isGroup,self.Index,self.LODIndex,blockindex)
+            for primitiveIndex,primitive in enumerate(asset.MultiMeshResources[self.resourceIndex].meshList[self.meshIndex].primitives):
+                ExportMesh(self.isLodMesh,self.resourceIndex,self.meshIndex,primitiveIndex)
                 ReadCoreFile()
 
         return {'FINISHED'}
@@ -2560,23 +3100,29 @@ class SaveLodDistances(bpy.types.Operator):
     def execute(self, context):
         SaveDistances( self.Index)
         return {'FINISHED'}
-
 class ShowUsedTextures(bpy.types.Operator):
     """Show used texture paths for the mesh block"""
     bl_idname = "object.usedtextures"
     bl_label = ""
 
-    isGroup: bpy.props.BoolProperty()
-    Index: bpy.props.IntProperty()
-    LODIndex: bpy.props.IntProperty()
-    BlockIndex: bpy.props.IntProperty()
-
+    isLodMesh: bpy.props.BoolProperty()  # is LodMeshResource, else it's a MultiMeshResource
+    resourceIndex: bpy.props.IntProperty()  # within the resource array, which is it (usually 0)
+    meshIndex: bpy.props.IntProperty()  # within the meshList of Resource, which is it (this points to either RegularSkinnedMeshResource or StaticMeshResource)
+    primitiveIndex: bpy.props.IntProperty()  # within the Static or Skinned mesh resource, which Primitive is it?
     def execute(self,context):
-        if self.isGroup:
-            mat = asset.LODGroups[self.Index].LODList[self.LODIndex].materialBlockList[self.BlockIndex]
+        if self.isLodMesh:
+            p = asset.LodMeshResources[self.resourceIndex].meshList[self.meshIndex].primitives[self.primitiveIndex]
+            if p.renderEffectRef.type != 0:  # Primitive has a material
+                mat = p.renderEffectResource
+            else:
+                mat = asset.LodMeshResources[self.resourceIndex].meshList[self.meshIndex].materials[self.primitiveIndex]
             mat.ui_ShowTextures = not mat.ui_ShowTextures
         else:
-            mat = asset.LODObjects[self.Index].LODList[self.LODIndex].materialBlockList[self.BlockIndex]
+            p = asset.MultiMeshResources[self.resourceIndex].meshList[self.meshIndex].primitives[self.primitiveIndex]
+            if p.renderEffectRef.type != 0:  # Primitive has a material
+                mat = p.renderEffectResource
+            else:
+                mat = asset.MultiMeshResources[self.resourceIndex].meshList[self.meshIndex].materials[self.primitiveIndex]
             mat.ui_ShowTextures = not mat.ui_ShowTextures
 
         return {'FINISHED'}
@@ -2588,7 +3134,6 @@ class HZDPanel(bpy.types.Panel):
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "scene"
-
 
     def draw(self,context):
         layout = self.layout
@@ -2612,13 +3157,14 @@ class HZDPanel(bpy.types.Panel):
 
         row = layout.row()
         row.operator("object.hzd_offsets", icon='ZOOM_ALL')
-        if BoneMatrices:
+        if Asset:
             row = layout.row()
             row.operator("object.import_skt",icon="ARMATURE_DATA")
             row = layout.row()
             row.prop(HZDEditor,"ExtractTextures")
+            row = layout.row()
+            row.operator("object.import_all",icon="OUTLINER_OB_LIGHTPROBE")
         mainRow = layout.row()
-
 class LODDistancePanel(bpy.types.Panel):
     bl_label = "LOD Distances"
     bl_idname = "OBJECT_PT_loddist"
@@ -2633,19 +3179,18 @@ class LODDistancePanel(bpy.types.Panel):
             layout = self.layout
             HZDEditor = context.scene.HZDEditor
             mainRow = layout.row()
-            for ig, lg in enumerate(asset.LODGroups):
+            for ig, lg in enumerate(asset.LodMeshResources):
                 box = mainRow.box()
                 box.label(text="LOD DISTANCES", icon='OPTIONS')
                 saveDistances = box.operator("object.savedistances")
                 saveDistances.Index = ig
-                for il, l in enumerate(lg.LODList):
+                for il, l in enumerate(lg.meshList):
                     lodBox = box.box()
                     disRow = lodBox.row()
                     disRow.prop(HZDEditor, "LodDistance" + str(il))
-
-class LodObjectPanel(bpy.types.Panel):
-    bl_label = "LOD Objects"
-    bl_idname = "OBJECT_PT_lodobject"
+class MultiMeshPanel(bpy.types.Panel):
+    bl_label = "Multi Mesh"
+    bl_idname = "OBJECT_PT_multimesh"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "scene"
@@ -2657,128 +3202,203 @@ class LodObjectPanel(bpy.types.Panel):
             layout = self.layout
             HZDEditor = context.scene.HZDEditor
             mainRow = layout.row()
-            for io, lo in enumerate(asset.LODObjects):
+            for imm, mm in enumerate(asset.MultiMeshResources):
                 box = mainRow.box()
-                box.label(text="LOD OBJECT", icon='SNAP_VOLUME')
-                for il, l in enumerate(lo.LODList):
+                box.label(text="MULTI MESH", icon='SNAP_VOLUME')
+                for il, l in enumerate(mm.meshList):
                     lodBox = box.box()
                     lodRow = lodBox.row()
-                    lodRow.label(text="ELEMENT", icon='MATERIAL_DATA')
+                    lodRow.label(text="PART", icon='MATERIAL_DATA')
+                    #Big buttons that import whole LODs/Parts
                     LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
-                    LODImport.isGroup = False
-                    LODImport.Index = io
-                    LODImport.LODIndex = il
+                    LODImport.isLodMesh = False
+                    LODImport.resourceIndex = imm
+                    LODImport.meshIndex = il
                     LODExport = lodRow.operator("object.export_lod_hzd", icon='EXPORT')
-                    LODExport.isGroup = False
-                    LODExport.Index = io
-                    LODExport.LODIndex = il
-                    for ib, m in enumerate(l.meshBlockList):
+                    LODExport.isLodMesh = False
+                    LODExport.resourceIndex = imm
+                    LODExport.meshIndex = il
+                    for ip, p in enumerate(l.primitives):
                         row = lodBox.row()
-                        row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
+                        row.label(text=str(ip) + "_" + l.meshName + " " + str(p.vertexBlock.vertexCount),
                                   icon='MESH_ICOSPHERE')
-                        if m.vertexBlock.inStream:
-                            if l.materialBlockList[ib].ui_ShowTextures:
+                        if p.vertexBlock.inStream:
+                            if p.renderEffectRef.type != 0: #Primitive has a material
+                                mat = p.renderEffectResource
+                            else:
+                                mat = l.materials[ip]
+                            if mat.ui_ShowTextures:
                                 texIcon = 'UV'
                             else:
                                 texIcon = 'TEXTURE'
 
                             texButton = row.operator("object.usedtextures", icon=texIcon)
-                            texButton.isGroup = True
-                            texButton.Index = io
-                            texButton.LODIndex = il
-                            texButton.BlockIndex = ib
+                            texButton.isLodMesh = False
+                            texButton.resourceIndex = imm
+                            texButton.meshIndex = il
+                            texButton.primitiveIndex = ip
 
                             Button = row.operator("object.import_hzd", icon='IMPORT')
-                            Button.isGroup = False
-                            Button.Index = io
-                            Button.LODIndex = il
-                            Button.BlockIndex = ib
+                            Button.isLodMesh = False
+                            Button.resourceIndex = imm
+                            Button.meshIndex = il
+                            Button.primitiveIndex = ip
                             Button = row.operator("object.export_hzd", icon='EXPORT')
-                            Button.isGroup = False
-                            Button.Index = io
-                            Button.LODIndex = il
-                            Button.BlockIndex = ib
+                            Button.isLodMesh = False
+                            Button.resourceIndex = imm
+                            Button.meshIndex = il
+                            Button.primitiveIndex = ip
 
-                            if l.materialBlockList[ib].ui_ShowTextures:
+                            if mat.ui_ShowTextures:
                                 texBox = lodBox.box()
 
-                                for t in l.materialBlockList[ib].uniqueTextures:
+                                for t in mat.uniqueTextures:
                                     texRow = texBox.row()
                                     texRow.label(text=t)
 
                         else:
                             row.label(text="Not able to Import for now.")
-
 class LodGroupPanel(bpy.types.Panel):
-    bl_label = "LOD Groups"
+    bl_label = "LOD Meshes"
     bl_idname = "OBJECT_PT_lodgroup"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "scene"
     bl_parent_id = "OBJECT_PT_hzdpanel"
     bl_options = {"DEFAULT_CLOSED"}
-
     def draw(self, context):
         if asset:
             layout = self.layout
             HZDEditor = context.scene.HZDEditor
             mainRow = layout.row()
-            for ig, lg in enumerate(asset.LODGroups):
+            for ilm, lm in enumerate(asset.LodMeshResources):
                 box = mainRow.box()
-                box.label(text="LOD GROUP", icon='STICKY_UVS_LOC')
-
-                for il, l in enumerate(lg.LODList):
+                box.label(text="LOD MESH", icon='STICKY_UVS_LOC')
+                for il, l in enumerate(lm.meshList):
                     lodBox = box.box()
                     lodRow = lodBox.row()
                     lodRow.label(text="LOD", icon='MOD_EXPLODE')
-
+                    #Big buttons that import whole LODs/Parts
                     LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
-                    LODImport.isGroup = True
-                    LODImport.Index = ig
-                    LODImport.LODIndex = il
+                    LODImport.isLodMesh = True
+                    LODImport.resourceIndex = ilm
+                    LODImport.meshIndex = il
                     LODExport = lodRow.operator("object.export_lod_hzd", icon='EXPORT')
-                    LODExport.isGroup = True
-                    LODExport.Index = ig
-                    LODExport.LODIndex = il
-
-                    for ib, m in enumerate(l.meshBlockList):
+                    LODExport.isLodMesh = True
+                    LODExport.resourceIndex = ilm
+                    LODExport.meshIndex = il
+                    for ip, p in enumerate(l.primitives):
                         row = lodBox.row()
-                        row.label(text=str(ib) + "_" + l.meshNameBlock.name + " " + str(m.vertexBlock.vertexCount),
+                        row.label(text=str(ip) + "_" + l.meshName + " " + str(p.vertexBlock.vertexCount),
                                   icon='MESH_ICOSPHERE')
-                        if m.vertexBlock.inStream:
-                            if l.materialBlockList[ib].ui_ShowTextures:
+                        if p.vertexBlock.inStream:
+                            if p.renderEffectRef.type != 0: #Primitive has a material
+                                mat = p.renderEffectResource
+                            else:
+                                mat = l.materials[ip]
+                            if mat.ui_ShowTextures:
                                 texIcon = 'UV'
                             else:
                                 texIcon = 'TEXTURE'
 
                             texButton = row.operator("object.usedtextures", icon=texIcon)
-                            texButton.isGroup = True
-                            texButton.Index = ig
-                            texButton.LODIndex = il
-                            texButton.BlockIndex = ib
+                            texButton.isLodMesh = True
+                            texButton.resourceIndex = ilm
+                            texButton.meshIndex = il
+                            texButton.primitiveIndex = ip
 
                             Button = row.operator("object.import_hzd", icon='IMPORT')
-                            Button.isGroup = True
-                            Button.Index = ig
-                            Button.LODIndex = il
-                            Button.BlockIndex = ib
+                            Button.isLodMesh = True
+                            Button.resourceIndex = ilm
+                            Button.meshIndex = il
+                            Button.primitiveIndex = ip
                             Button = row.operator("object.export_hzd", icon='EXPORT')
-                            Button.isGroup = True
-                            Button.Index = ig
-                            Button.LODIndex = il
-                            Button.BlockIndex = ib
+                            Button.isLodMesh = True
+                            Button.resourceIndex = ilm
+                            Button.meshIndex = il
+                            Button.primitiveIndex = ip
 
-                            if l.materialBlockList[ib].ui_ShowTextures:
+                            if mat.ui_ShowTextures:
                                 texBox = lodBox.box()
 
-                                for t in l.materialBlockList[ib].uniqueTextures:
+                                for t in mat.uniqueTextures:
                                     texRow = texBox.row()
                                     texRow.label(text=t)
 
                         else:
                             row.label(text="Not able to Import for now.")
+class SingularMeshPanel(bpy.types.Panel):
+    bl_label = "Singular Meshes"
+    bl_idname = "OBJECT_PT_singularmesh"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+    bl_parent_id = "OBJECT_PT_hzdpanel"
+    bl_options = {"DEFAULT_CLOSED"}
+    def draw(self, context):
+        if asset:
+            layout = self.layout
+            HZDEditor = context.scene.HZDEditor
+            mainRow = layout.row()
+            for il, l in enumerate(asset.RegularSkinnedMeshResources):
+                box = mainRow.box()
+                box.label(text="SINGULAR MESH", icon='STICKY_UVS_LOC')
+
+                lodBox = box.box()
+                lodRow = lodBox.row()
+                lodRow.label(text="NOT SUPPORTED", icon='MOD_EXPLODE')
+                #Big buttons that import whole LODs/Parts
+                # LODImport = lodRow.operator("object.import_lod_hzd", icon='IMPORT')
+                # LODImport.isLodMesh = True
+                # LODImport.resourceIndex = il
+                # LODImport.meshIndex = -1 # in this case the resource is the mesh
+                # LODExport = lodRow.operator("object.export_lod_hzd", icon='EXPORT')
+                # LODExport.isLodMesh = True
+                # LODExport.resourceIndex = il
+                # LODExport.meshIndex = -1
+                for ip, p in enumerate(l.primitives):
+                    row = lodBox.row()
+                    row.label(text=str(ip) + "_" + l.meshName + " " + str(p.vertexBlock.vertexCount),
+                              icon='MESH_ICOSPHERE')
+                    # if p.vertexBlock.inStream:
+                    #     if p.renderEffectRef.type != 0: #Primitive has a material
+                    #         mat = p.renderEffectResource
+                    #     else:
+                    #         mat = l.materials[ip]
+                    #     if mat.ui_ShowTextures:
+                    #         texIcon = 'UV'
+                    #     else:
+                    #         texIcon = 'TEXTURE'
+                    #
+                    #     texButton = row.operator("object.usedtextures", icon=texIcon)
+                    #     texButton.isLodMesh = True
+                    #     texButton.resourceIndex = il
+                    #     texButton.meshIndex = -1
+                    #     texButton.primitiveIndex = ip
+                    #
+                    #     Button = row.operator("object.import_hzd", icon='IMPORT')
+                    #     Button.isLodMesh = True
+                    #     Button.resourceIndex = il
+                    #     Button.meshIndex = -1
+                    #     Button.primitiveIndex = ip
+                    #     Button = row.operator("object.export_hzd", icon='EXPORT')
+                    #     Button.isLodMesh = True
+                    #     Button.resourceIndex = il
+                    #     Button.meshIndex = -1
+                    #     Button.primitiveIndex = ip
+                    #
+                    #     if mat.ui_ShowTextures:
+                    #         texBox = lodBox.box()
+                    #
+                    #         for t in mat.uniqueTextures:
+                    #             texRow = texBox.row()
+                    #             texRow.label(text=t)
+
+
+                    row.label(text="Not able to Import for now.")
 
 classes=[ImportHZD,
+        ImportAll,
          ImportLodHZD,
          ImportSkeleton,
          ExportHZD,
@@ -2788,10 +3408,11 @@ classes=[ImportHZD,
          SearchForOffsets,
          HZDPanel,
          LODDistancePanel,
-         LodObjectPanel,
+         MultiMeshPanel,
          LodGroupPanel,
          ShowUsedTextures,
-         ExtractHZDAsset]
+         ExtractHZDAsset,
+         SingularMeshPanel]
 
 def register():
     for c in classes:
