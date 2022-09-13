@@ -1343,11 +1343,13 @@ def ExtractAsset(assetPath):
     HZDEditor.HZDPath = filePath
 
     ReadCoreFile()
-    skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile #TODO should do more checks on here (not sure if static or skinned, not sure if external
-    say(skeletonFile)
+    meshType = asset.LodMeshResources[0].meshBase.drawableCullInfo.meshType
+    if meshType != CullInfo.MeshType.StaticMesh:
+        skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile #TODO should do more checks on here (not sure if static or skinned, not sure if external
+        say(skeletonFile)
 
-    fileSkeletonPath = AM.FindAndExtract(skeletonFile + ".core", False)
-    HZDEditor.SkeletonPath = fileSkeletonPath
+        fileSkeletonPath = AM.FindAndExtract(skeletonFile + ".core", False)
+        HZDEditor.SkeletonPath = fileSkeletonPath
     return
 
 def LoadNodeGroup(group_name):
@@ -2332,7 +2334,7 @@ class DataBlock:
         if self.guid == expectedGUID:
             return
         else:
-            raise Exception("%s  --  Invalid Block GUID: got %s expected %s"%(self.__class__.__name__,str(self.guid.hex()) ,str(expectedGUID)))
+            raise Exception("%s  --  Invalid Block GUID: got %s expected %s"%(self.__class__.__name__,str(self.guid.hex()) ,str(expectedGUID.hex())))
     def EndBlock(self,f):
         f.seek(self.blockStartOffset + self.size)
 
