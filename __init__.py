@@ -911,6 +911,7 @@ class HZDSettings(bpy.types.PropertyGroup):
     LodDistance15: bpy.props.FloatProperty(name="Lod Distance 15")
     ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False,description="Toggle the extraction of textures. When importing a mesh, texture will be detected and extracted to the Workspace directory.")
     OverwriteTextures : bpy.props.BoolProperty(name="Overwrite Textures",default=False,description="Overwrite existing textures, when textures will be extracted to the Workspace directory.")
+    KeepDDS : bpy.props.BoolProperty(name="Keep DDS",default=False,description="Keep DDS file, when DDS will be converted to PNG.")
 
 def ParsePosition(f,storageType):
     r = ByteReader
@@ -1434,7 +1435,8 @@ def ExtractTexture(outWorkspace,texPath):
                         else:
                             subprocess.run([str(HZDEditor.NVTTPath), str(ddsImage), "-o", str(outImage)])
                         if outImage.exists():
-                            ddsImage.unlink(missing_ok=True)
+                            if not HZDEditor.KeepDDS:
+                                ddsImage.unlink(missing_ok=True)
                         else:
                             outImage = ddsImage
                     textureFiles.append(outImage)
@@ -3402,6 +3404,7 @@ class HZDPanel(bpy.types.Panel):
             row = layout.row()
             row.prop(HZDEditor,"ExtractTextures")
             row.prop(HZDEditor,"OverwriteTextures")
+            row.prop(HZDEditor,"KeepDDS")
             row = layout.row()
             row.operator("object.import_all",icon="OUTLINER_OB_LIGHTPROBE")
         mainRow = layout.row()
