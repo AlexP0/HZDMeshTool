@@ -1322,7 +1322,10 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
     if HZDEditor.ExtractTextures:
         if isLodMesh:
             #TODO need a better way to find that material. LodMeshResource possibly doesn't exist, material is possibly inside Primitive instead of mesh.
-            matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
+            if meshType == CullInfo.MeshType.StaticMesh:
+                matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].primitives[primIndex].renderEffectResource
+            else:
+                matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
         else:
             matblock = asset.MultiMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
         CreateMaterial(obj,matblock,meshName)
@@ -1433,11 +1436,7 @@ def ExtractTexture(outWorkspace,texPath):
             else:
                 streamData = bytes()
                 if t.streamSize32 > 0:
-                    # Check if .stream was already there
-                    if os.path.exists(outWorkspace + texPath+".core.stream"):
-                        streamFilePath = outWorkspace + texPath+".core.stream"
-                    else:
-                        streamFilePath = AM.FindAndExtract(texPath,True)
+                    streamFilePath = AM.FindAndExtract(texPath+".core.stream",True)
                     with open(streamFilePath,'rb') as s:
                         s.seek(t.streamOffset)
                         streamData = s.read(t.streamSize64)
@@ -1466,13 +1465,9 @@ def ExtractTexture(outWorkspace,texPath):
     textureFiles = []
     AM = ArchiveManager()
 
-    if os.path.exists(outWorkspace+texPath+".core"):
-        ParseTexture(outWorkspace+texPath+".core")
-    else:
-        #Extract Core
-        filePath = AM.FindAndExtract(texPath,False)
-
-        ParseTexture(filePath)
+    #Extract Core
+    filePath = AM.FindAndExtract(texPath+".core",False)
+    ParseTexture(filePath)
 
     return textureFiles, texAs
 
@@ -2392,7 +2387,7 @@ class TextureSet(DataBlock):
             f.seek(4,1)
             refType = r.uint8(f)
             if refType > 0:
-                self.textureRef = r.uuid(f)
+                self.textureRef = r.guid(f)
             elif refType in [2,3]:
                 self.textureRef = r.hashtext(f)
 
@@ -2503,11 +2498,11 @@ class Texture(DataBlock):
         self.format : Texture.PixelFormat = self.PixelFormat(r.uint8(f))
         f.seek(2,1)
         f.seek(20,1)
-        self.imageChunkSize= r.int32(f)
-        self.thumbnailLength = r.int32(f)
-        self.streamSize32 = r.int32(f)
-        self.mipCount = r.int32(f)
+        self.imageChunkSize= r.uint32(f)
+        self.thumbnailLength = r.uint32(f)
+        self.streamSize32 = r.uint32(f)
         if self.streamSize32 > 0:
+            self.mipCount = r.uint32(f)
             self.streamPath = r.path(f) [6:] #remove "cache:"
             self.streamOffset = r.uint64(f)
             self.streamSize64 = r.uint64(f)
