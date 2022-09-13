@@ -534,11 +534,11 @@ class ArchiveManager:
 
     def FindAndExtract(self,filePath,isStream = False):
         if self.isFileInWorkspace(filePath,isStream):
-            assetFile = self.FindFile(filePath)
-            ExtractedFilePath = self.ExtractFile(assetFile,filePath,isStream)
-        else:
             ExtractedFilePath = self.GetExtractedFilePath(filePath,isStream)
             print("File Already Extracted: ",ExtractedFilePath)
+        else:
+            assetFile = self.FindFile(filePath)
+            ExtractedFilePath = self.ExtractFile(assetFile,filePath,isStream)
         return ExtractedFilePath
 def ClearProperties(self,context):
     HZDEditor = bpy.context.scene.HZDEditor
