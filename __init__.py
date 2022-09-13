@@ -398,12 +398,12 @@ class ArchiveManager:
     def GetExtractedFilePath(self,filePath,isStream=False):
         HZDEditor = bpy.context.scene.HZDEditor
         if filePath[-5:] == ".core" or filePath[-12:] == ".core.stream":
-            ExtractedFilePath = HZDEditor.WorkAbsPath + filePath
+            ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath)
         else:
             if isStream:
-                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core.stream"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core.stream"
             else:
-                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core"
         return ExtractedFilePath
     def ExtractFile(self,file,filePath, isStream = False):
         class Oodle:
@@ -413,7 +413,7 @@ class ArchiveManager:
             if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
                 _lib = ctypes.CDLL(str(HZDEditor.GameAbsPath + "/" + 'liboo2corelinux64.so.9'))
             else:
-                _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
+                _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "\\" + 'oo2core_3_win64.dll'))
             # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
             _compress = _lib.OodleLZ_Compress
             _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
@@ -460,12 +460,12 @@ class ArchiveManager:
 
         DataChunks = b''
         if filePath[-5:]==".core" or filePath[-12:] == ".core.stream":
-            ExtractedFilePath = HZDEditor.WorkAbsPath+filePath
+            ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath)
         else:
             if isStream:
-                ExtractedFilePath = HZDEditor.WorkAbsPath+filePath+".core.stream"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core.stream"
             else:
-                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core"
 
         if os.path.exists(ExtractedFilePath):
             say(filePath + "------Asset already extracted")
@@ -477,7 +477,7 @@ class ArchiveManager:
 
             directory = pathlib.Path(ExtractedFilePath).parent
             pathlib.Path(directory).mkdir(parents= True,exist_ok=True)
-            with open(HZDEditor.GamePath + "Packed_DX12/" + self.DesiredArchive, 'rb') as f, open(ExtractedFilePath, 'wb') as w:
+            with open(HZDEditor.GamePath + os.path.join("Packed_DX12", self.DesiredArchive), 'rb') as f, open(ExtractedFilePath, 'wb') as w:
                 for chunk in self.Chunks[StartChunkIndex:EndChunkIndex + 1]:
                     # chunk.print()
                     f.seek(chunk.compressed_offset)
@@ -498,7 +498,7 @@ class ArchiveManager:
         say(str(DesiredHash))
         for binArchive in ['Patch.bin','Remainder.bin','DLC1.bin','Initial.bin']:
             say("Searching for "+filePath+" in "+binArchive)
-            with open(HZDEditor.GamePath + "Packed_DX12/" + binArchive, 'rb') as f:
+            with open(HZDEditor.GamePath + os.path.join("Packed_DX12", binArchive), 'rb') as f:
                 H = self.BinHeader()
                 self.Chunks.clear()
                 H.parse(f)
