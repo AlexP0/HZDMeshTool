@@ -25,6 +25,7 @@ import mathutils
 import math
 import operator
 
+from sys import platform
 import ctypes
 from ctypes import c_size_t, c_char_p, c_int32
 from pathlib import Path
@@ -165,7 +166,10 @@ def say(string,level=0):
         print(str(string))
 
 # Path to "NVIDIA Texture Tools Exporter" for converting DDS to PNG
-NVTTDefaultPath = Path('C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvtt_export.exe')
+if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
+    NVTTDefaultPath = Path('/opt/NVIDIA_Texture_Tools_Linux_3_1_6/nvdecompress')
+else:
+    NVTTDefaultPath = Path('C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvtt_export.exe')
 
 # -----------------------------------------------------------------------------
 # Node Adding Operator
@@ -393,7 +397,10 @@ class ArchiveManager:
             HZDEditor = bpy.context.scene.HZDEditor
 
             # _local_path = Path(__file__).absolute().parent
-            _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
+            if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
+                _lib = ctypes.CDLL(str(HZDEditor.GameAbsPath + "/" + 'liboo2corelinux64.so.9'))
+            else:
+                _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
             # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
             _compress = _lib.OodleLZ_Compress
             _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
@@ -457,7 +464,7 @@ class ArchiveManager:
 
             directory = pathlib.Path(ExtractedFilePath).parent
             pathlib.Path(directory).mkdir(parents= True,exist_ok=True)
-            with open(HZDEditor.GamePath + "Packed_DX12\\" + self.DesiredArchive, 'rb') as f, open(ExtractedFilePath, 'wb') as w:
+            with open(HZDEditor.GamePath + "Packed_DX12/" + self.DesiredArchive, 'rb') as f, open(ExtractedFilePath, 'wb') as w:
                 for chunk in self.Chunks[StartChunkIndex:EndChunkIndex + 1]:
                     # chunk.print()
                     f.seek(chunk.compressed_offset)
@@ -478,7 +485,7 @@ class ArchiveManager:
         say(str(DesiredHash))
         for binArchive in ['Patch.bin','Remainder.bin','DLC1.bin','Initial.bin']:
             say("Searching for "+filePath+" in "+binArchive)
-            with open(HZDEditor.GamePath + "Packed_DX12\\" + binArchive, 'rb') as f:
+            with open(HZDEditor.GamePath + "Packed_DX12/" + binArchive, 'rb') as f:
                 H = self.BinHeader()
                 self.Chunks.clear()
                 H.parse(f)
@@ -1008,7 +1015,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
     core = HZDEditor.HZDAbsPath
     stream = core+".stream"
 
-    bpy.ops.wm.console_toggle()
+    #bpy.ops.wm.console_toggle()
 
     # CREATE COLLECTION TREE #####################
     lodCollection = bpy.context.scene.collection
@@ -1305,7 +1312,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
         else:
             matblock = asset.MultiMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
         CreateMaterial(obj,matblock,meshName)
-    bpy.ops.wm.console_toggle()
+    #bpy.ops.wm.console_toggle()
 
 def ExtractAsset(assetPath):
 
@@ -1419,8 +1426,17 @@ def ExtractTexture(outWorkspace,texPath):
                     w.write(t.thumbnail)
                     w.close()
                     if os.path.exists(HZDEditor.NVTTPath):
-                        subprocess.run([str(HZDEditor.NVTTPath), str(ddsImage), "-o", str(outImage)])
-                        ddsImage.unlink(missing_ok=True)
+                        if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
+                            from os import environ
+                            env = dict(os.environ)
+                            env['LD_LIBRARY_PATH'] = str(HZDEditor.NVTTPath)[:-12]
+                            subprocess.run([str(HZDEditor.NVTTPath), "-format", "png", str(ddsImage)], env=env)
+                        else:
+                            subprocess.run([str(HZDEditor.NVTTPath), str(ddsImage), "-o", str(outImage)])
+                        if outImage.exists():
+                            ddsImage.unlink(missing_ok=True)
+                        else:
+                            outImage = ddsImage
                     textureFiles.append(outImage)
 
     textureFiles = []

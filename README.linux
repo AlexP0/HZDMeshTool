@@ -1,0 +1,14 @@
+To use this addon with blender for Linux you need:
+
+1) the linux oodle shared library liboo2corelinux64.so.9,
+which could be extracted from UnrealEngine.
+This lib must be put into the HZD games folder or in the addon folder of HZDMeshTool.
+In the addon folder there is helper script get_liboo2corelinux64.sh to get this lib from UnrealEngine.
+To use this script download https://github.com/EpicGames/UnrealEngine/blob/release/Engine/Build/Commit.gitdeps.xml
+Before you can download this file, follow the instruction at https://github.com/EpicGames/Signup
+to get access to the UnrealEngine github repo.
+Then call ./get_liboo2corelinux64.sh with path to Commit.gitdeps.xml.
+
+2) nvdecompress with PNG support, which can be extract from
+https://developer.nvidia.com/designworks/texture-tools-for-photoshop/secure/2021.2.0/NVIDIA_Texture_Tools_Linux_3_1_6.tar.gz.
+Put it in the addon folder of HZDMeshTool or set NVTT path at the HZD panel to the location of nvdecompress.
