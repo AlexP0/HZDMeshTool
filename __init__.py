@@ -31,6 +31,7 @@ from ctypes import c_size_t, c_char_p, c_int32
 from pathlib import Path
 from typing import Union, Dict
 from enum import IntEnum
+from enum import IntFlag
 import subprocess
 # python debuger
 import pdb
@@ -156,6 +157,18 @@ class DXGI(IntEnum):
     DXGI_FORMAT_V208 = 131,
     DXGI_FORMAT_V408 = 132,
     DXGI_FORMAT_FORCE_UINT = 0xffffffff
+
+class DDPF(IntFlag):
+    ALPHAPIXELS = 0x00000001,
+    ALPHA = 0x00000002,
+    FOURCC = 0x00000004,
+    RGB = 0x00000040,
+    PALETTEINDEXED1 = 0x00000800,
+    PALETTEINDEXED2 = 0x00001000,
+    PALETTEINDEXED4 = 0x00000008,
+    PALETTEINDEXED8 = 0x00000020,
+    LUMINANCE = 0x00020000,
+    ALPHAPREMULT = 0x00008000
 
 BoneMatrices = {} #TODO this BoneMatrices is very weird.
 
@@ -1346,47 +1359,56 @@ def LoadNodeGroup(group_name):
 
 def ExtractTexture(outWorkspace,texPath):
     texAs = None
+
     def BuildDDSHeader(tex:Texture) -> bytes:
         r = BytePacker
         data = bytes()
-        flags = b'\x07\x10\x00\x00'
+        flags = b'\x07\x10\x00\x00' # DDSD_CAPS|DDSD_HEIGHT|DDSD_WIDTH|DDSD_PIXELFORMAT
         data += flags
 
         data += r.uint32(tex.height * tex.arraySize if tex.type == Texture.TextureType['_2DARRAY'] else tex.height)
         data += r.uint32(tex.width)
-        data += r.uint32(tex.thumbnailLength + tex.streamSize32)
-        data += r.uint32(0)
-        data += r.uint32(tex.mipCount + 1 if hasattr(tex, "mipCount") else 1)
-        data += (b'\x00' * 4) * 11
+        data += r.uint32(tex.thumbnailLength + tex.streamSize32) # pitch
+        data += r.uint32(0) # depth
+        data += r.uint32(tex.mipCount + 1 if hasattr(tex, "mipCount") else 1) # mipmap count
+        data += (b'\x00' * 4) * 11 # reserved
 
-        ddsPF = bytes()
-        ddsPF += r.uint32(32)
-        ddsPF += r.uint32(4)
-        ddsPF += b'DX10'
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
+        if tex.format in ddpf_map:
+            pf = ddpf_map[tex.format]
+        else:
+            pf = (DDPF.FOURCC, 0, 0, 0, 0, 0)
+        (flags, bits, rmask, gmask, bmask, amask) = pf
+
+        ddsPF = bytes() # DDS pixel format
+        ddsPF += r.uint32(32) # size
+        ddsPF += r.uint32(flags)  # flags
+        ddsPF += b'DX10' if flags == DDPF.FOURCC else r.uint32(0) # fourcc
+        ddsPF += r.uint32(bits)  # bit count
+        ddsPF += r.uint32(rmask)  # red mask
+        ddsPF += r.uint32(gmask)  # green mask
+        ddsPF += r.uint32(bmask)  # blue mask
+        ddsPF += r.uint32(amask)  # alpha mask
 
         data += ddsPF
-        data += r.uint32(0)
-        data += r.uint32(0)
-        data += r.uint32(0)
-        data += r.uint32(0)
-        data += r.uint32(0)
+        caps = b'\x00\x10\x00\x00' # DDSCAPS_TEXTURE
+        data += caps
+        data += r.uint32(0) # caps2
+        data += r.uint32(0) # caps3
+        data += r.uint32(0) # caps4
+        data += r.uint32(0) # not used
 
-        data = b'DDS ' + r.uint32(len(data)+4) + data
+        data = b'DDS ' + r.uint32(len(data)+4) + data # fourcc + size
 
-        dx10 = b''
-        assert tex.format in format_map, f"Unmapped image format: {tex.format.name}"
-        dx10 += r.uint32(format_map[tex.format].value)
-        dx10 += r.uint32(3)
-        dx10 += r.uint32(0)
-        dx10 += r.uint32(1)
-        dx10 += r.uint32(0)
+        if flags == DDPF.FOURCC:
+            dx10 = b''
+            assert tex.format in format_map, f"Unmapped image format: {tex.format.name}"
+            dx10 += r.uint32(format_map[tex.format].value) # DXGI format
+            dx10 += r.uint32(3) # resource dimension
+            dx10 += r.uint32(0) # misc flag
+            dx10 += r.uint32(1) # array size
+            dx10 += r.uint32(0) # reserved
 
-        data += dx10
+            data += dx10
 
         return data
 
@@ -2495,6 +2517,7 @@ class Texture(DataBlock):
         self.thumbnail = f.read(self.thumbnailLength)
 
         self.EndBlock(f)
+
 format_map: Dict[Texture.PixelFormat, DXGI] = {
     Texture.PixelFormat.INVALID: DXGI.DXGI_FORMAT_UNKNOWN,
     # Texture.PixelFormat.RGBA_5551: ,
@@ -2509,7 +2532,7 @@ format_map: Dict[Texture.PixelFormat, DXGI] = {
     # Texture.PixelFormat.RGB_565_REV: ,
     # Texture.PixelFormat.RGB_555: ,
     # Texture.PixelFormat.RGB_555_REV: ,
-    Texture.PixelFormat.RGBA_8888: DXGI.DXGI_FORMAT_R8G8B8A8_TYPELESS,
+    Texture.PixelFormat.RGBA_8888: DXGI.DXGI_FORMAT_R8G8B8A8_UNORM,
     # Texture.PixelFormat.RGBA_8888_REV: ,
     # Texture.PixelFormat.RGBE_REV: ,
     Texture.PixelFormat.RGBA_FLOAT_32: DXGI.DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -2573,6 +2596,23 @@ format_map: Dict[Texture.PixelFormat, DXGI] = {
     Texture.PixelFormat.BC6U: DXGI.DXGI_FORMAT_BC6H_UF16,
     Texture.PixelFormat.BC6S: DXGI.DXGI_FORMAT_BC6H_SF16,
     Texture.PixelFormat.BC7: DXGI.DXGI_FORMAT_BC7_UNORM
+}
+
+ddpf_map: Dict[Texture.PixelFormat, list] = {
+    Texture.PixelFormat.RGB_888:        ( DDPF.RGB,                  24, 0xFF,       0xFF00,     0xFF0000,   0 ),
+    Texture.PixelFormat.RGB_888_REV:    ( DDPF.RGB,                  24, 0xFF0000,   0xFF00,     0xFF,       0 ),
+    Texture.PixelFormat.RGB_888_32:     ( DDPF.RGB,                  32, 0xFF,       0xFF00,     0xFF0000,   0 ),
+    Texture.PixelFormat.RGB_888_32_REV: ( DDPF.RGB,                  32, 0xFF0000,   0xFF00,     0xFF,       0 ),
+    Texture.PixelFormat.RGBA_8888:      ( DDPF.RGB|DDPF.ALPHAPIXELS, 32, 0xFF,       0xFF00,     0xFF0000,   0xFF000000 ),
+    Texture.PixelFormat.RGBA_8888_REV:  ( DDPF.RGB|DDPF.ALPHAPIXELS, 32, 0xFF0000,   0xFF00,     0xFF,       0xFF000000 ),
+    Texture.PixelFormat.RGB_565_REV:    ( DDPF.RGB,                  16, 0xF800,     0x7E0,      0x1F,       0 ),
+    Texture.PixelFormat.RGB_555_REV:    ( DDPF.RGB,                  16, 0x7C00,     0x3E0,      0x1F,       0 ),
+    Texture.PixelFormat.RGBA_5551_REV:  ( DDPF.RGB|DDPF.ALPHAPIXELS, 16, 0x7C00,     0x3E0,      0x1F,       0x8000 ),
+    Texture.PixelFormat.RGBA_4444_REV:  ( DDPF.RGB|DDPF.ALPHAPIXELS, 16, 0xF00,      0xF0,       0xF,        0xF000 ),
+    Texture.PixelFormat.R_UNORM_8:      ( DDPF.LUMINANCE,             8, 0xFF,       0,          0,          0 ),
+    Texture.PixelFormat.R_UNORM_16:     ( DDPF.LUMINANCE,            16, 0xFFFF,     0,          0,          0 ),
+    Texture.PixelFormat.RG_UNORM_8:     ( DDPF.RGB,                  16, 0xFF,       0xFF00,     0,          0 ),
+    Texture.PixelFormat.RG_UNORM_16:    ( DDPF.RGB,                  32, 0xFFFF,     0xFFFF0000, 0,          0 ),
 }
 
 class Bone:
