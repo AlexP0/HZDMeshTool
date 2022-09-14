@@ -9,6 +9,12 @@ bl_info = {
     }
 
 
+if "bpy" in locals():
+    import imp
+    imp.reload(pymmh3)
+else:
+    from . import pymmh3
+
 import bpy
 import bmesh
 import os
@@ -19,23 +25,16 @@ import mathutils
 import math
 import operator
 
-#uncomment this when publishing
-# from .
-import pymmh3
-
+from sys import platform
 import ctypes
 from ctypes import c_size_t, c_char_p, c_int32
 from pathlib import Path
 from typing import Union, Dict
 from enum import IntEnum
-
-# comment this when publishing
-if "bpy" in locals():
-    import imp
-    imp.reload(pymmh3)
-else:
-    from . import pymmh3
-
+from enum import IntFlag
+import subprocess
+# python debuger
+import pdb
 
 class DXGI(IntEnum):
     DXGI_FORMAT_UNKNOWN = 0,
@@ -159,6 +158,18 @@ class DXGI(IntEnum):
     DXGI_FORMAT_V408 = 132,
     DXGI_FORMAT_FORCE_UINT = 0xffffffff
 
+class DDPF(IntFlag):
+    ALPHAPIXELS = 0x00000001,
+    ALPHA = 0x00000002,
+    FOURCC = 0x00000004,
+    RGB = 0x00000040,
+    PALETTEINDEXED1 = 0x00000800,
+    PALETTEINDEXED2 = 0x00001000,
+    PALETTEINDEXED4 = 0x00000008,
+    PALETTEINDEXED8 = 0x00000020,
+    LUMINANCE = 0x00020000,
+    ALPHAPREMULT = 0x00008000
+
 BoneMatrices = {} #TODO this BoneMatrices is very weird.
 
 verbose = True
@@ -166,6 +177,100 @@ verbose = True
 def say(string,level=0):
     if verbose:
         print(str(string))
+
+# Path to "NVIDIA Texture Tools Exporter" for converting DDS to PNG
+if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
+    NVTTDefaultPath = Path('/opt/NVIDIA_Texture_Tools_Linux_3_1_6/nvdecompress')
+else:
+    NVTTDefaultPath = Path('C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvtt_export.exe')
+
+# -----------------------------------------------------------------------------
+# Node Adding Operator
+#
+class NODE_OT_HZDMT_add(bpy.types.Operator):
+    """Add a HZD Mesh Tool node group"""
+    bl_idname = "node.hzdmt_add"
+    bl_label = "Add HZD Mesh Tool node group"
+    bl_description = "Add HZD Mesh Tool node group"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    filepath: bpy.props.StringProperty(
+        subtype='FILE_PATH',
+    )
+    group_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        if bpy.data.node_groups.find(self.group_name) == -1:
+            with bpy.data.libraries.load(self.filepath, link=True) as (data_from, data_to):
+                assert(self.group_name in data_from.node_groups)
+                data_to.node_groups = [self.group_name]
+        node_type = {
+            "ShaderNodeTree": "ShaderNodeGroup",
+            "CompositorNodeTree": "CompositorNodeGroup",
+            "TextureNodeTree": "TextureNodeGroup",
+            "GeometryNodeTree": "GeometryNodeGroup",
+        }[type(context.space_data.edit_tree).__name__]
+        bpy.ops.node.add_node('INVOKE_DEFAULT', type=node_type, use_transform=True, settings=[{"name":"node_tree", "value":"bpy.data.node_groups['" + self.group_name + "']"}])
+        return {'FINISHED'}
+
+#
+# Node menu list
+#
+def node_hzdmt_cache(reload=False):
+    dirpath = os.path.dirname(__file__) # addon path
+
+    if node_hzdmt_cache._node_cache_path != dirpath:
+        reload = True
+
+    node_cache = node_hzdmt_cache._node_cache
+    if reload:
+        node_cache = []
+    if node_cache:
+        return node_cache
+
+    for filepath in Path(dirpath).rglob('*.blend'):
+        with bpy.data.libraries.load(str(filepath)) as (data_from, data_to):
+            for group_name in data_from.node_groups:
+                node_cache.append((group_name, str(filepath)))
+
+    node_cache = sorted(node_cache)
+
+    node_hzdmt_cache._node_cache = node_cache
+    node_hzdmt_cache._node_cache_path = dirpath
+
+    return node_cache
+
+node_hzdmt_cache._node_cache = []
+node_hzdmt_cache._node_cache_path = ""
+
+class NODE_MT_HZDMT_add(bpy.types.Menu):
+    bl_label = "Node HZD Mesh Tool"
+
+    def draw(self, context):
+        layout = self.layout
+
+        try:
+            node_items = node_hzdmt_cache()
+        except Exception as ex:
+            node_items = ()
+            layout.label(text=repr(ex), icon='ERROR')
+
+        for group_name, filepath in node_items:
+            if not group_name.startswith("_"):
+                props = layout.operator(
+                    NODE_OT_HZDMT_add.bl_idname,
+                    text=group_name,
+                )
+                props.filepath = filepath
+                props.group_name = group_name
+
+def add_node_button(self, context):
+    self.layout.menu(
+        NODE_MT_HZDMT_add.__name__,
+        text="HZD Mesh Tool",
+        icon='PLUGIN',
+    )
+# -----------------------------------------------------------------------------
 
 class ArchiveManager:
     class BinHeader:
@@ -293,19 +398,22 @@ class ArchiveManager:
     def GetExtractedFilePath(self,filePath,isStream=False):
         HZDEditor = bpy.context.scene.HZDEditor
         if filePath[-5:] == ".core" or filePath[-12:] == ".core.stream":
-            ExtractedFilePath = HZDEditor.WorkAbsPath + filePath
+            ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath)
         else:
             if isStream:
-                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core.stream"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core.stream"
             else:
-                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core"
         return ExtractedFilePath
     def ExtractFile(self,file,filePath, isStream = False):
         class Oodle:
             HZDEditor = bpy.context.scene.HZDEditor
 
             # _local_path = Path(__file__).absolute().parent
-            _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "/" + 'oo2core_3_win64.dll'))
+            if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
+                _lib = ctypes.CDLL(str(HZDEditor.GameAbsPath + "/" + 'liboo2corelinux64.so.9'))
+            else:
+                _lib = ctypes.WinDLL(str(HZDEditor.GameAbsPath + "\\" + 'oo2core_3_win64.dll'))
             # _lib = ctypes.WinDLL("S:\SteamLibrary\steamapps\common\Horizon Zero Dawn\oo2core_3_win64.dll")
             _compress = _lib.OodleLZ_Compress
             _compress.argtypes = [c_int32, c_char_p, c_size_t, c_char_p, c_int32, c_size_t, c_size_t, c_size_t,
@@ -352,12 +460,12 @@ class ArchiveManager:
 
         DataChunks = b''
         if filePath[-5:]==".core" or filePath[-12:] == ".core.stream":
-            ExtractedFilePath = HZDEditor.WorkAbsPath+filePath
+            ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath)
         else:
             if isStream:
-                ExtractedFilePath = HZDEditor.WorkAbsPath+filePath+".core.stream"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core.stream"
             else:
-                ExtractedFilePath = HZDEditor.WorkAbsPath + filePath + ".core"
+                ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core"
 
         if os.path.exists(ExtractedFilePath):
             say(filePath + "------Asset already extracted")
@@ -369,7 +477,7 @@ class ArchiveManager:
 
             directory = pathlib.Path(ExtractedFilePath).parent
             pathlib.Path(directory).mkdir(parents= True,exist_ok=True)
-            with open(HZDEditor.GamePath + "Packed_DX12\\" + self.DesiredArchive, 'rb') as f, open(ExtractedFilePath, 'wb') as w:
+            with open(HZDEditor.GamePath + os.path.join("Packed_DX12", self.DesiredArchive), 'rb') as f, open(ExtractedFilePath, 'wb') as w:
                 for chunk in self.Chunks[StartChunkIndex:EndChunkIndex + 1]:
                     # chunk.print()
                     f.seek(chunk.compressed_offset)
@@ -390,7 +498,7 @@ class ArchiveManager:
         say(str(DesiredHash))
         for binArchive in ['Patch.bin','Remainder.bin','DLC1.bin','Initial.bin']:
             say("Searching for "+filePath+" in "+binArchive)
-            with open(HZDEditor.GamePath + "Packed_DX12\\" + binArchive, 'rb') as f:
+            with open(HZDEditor.GamePath + os.path.join("Packed_DX12", binArchive), 'rb') as f:
                 H = self.BinHeader()
                 self.Chunks.clear()
                 H.parse(f)
@@ -426,11 +534,11 @@ class ArchiveManager:
 
     def FindAndExtract(self,filePath,isStream = False):
         if self.isFileInWorkspace(filePath,isStream):
-            assetFile = self.FindFile(filePath)
-            ExtractedFilePath = self.ExtractFile(assetFile,filePath,isStream)
-        else:
             ExtractedFilePath = self.GetExtractedFilePath(filePath,isStream)
             print("File Already Extracted: ",ExtractedFilePath)
+        else:
+            assetFile = self.FindFile(filePath)
+            ExtractedFilePath = self.ExtractFile(assetFile,filePath,isStream)
         return ExtractedFilePath
 def ClearProperties(self,context):
     HZDEditor = bpy.context.scene.HZDEditor
@@ -795,6 +903,9 @@ class HZDSettings(bpy.types.PropertyGroup):
                                            description="Path to the robot_modelhelpers.core file. If not set the tool will try to extract it for you.\n"
                                                        "This is used for placing detachable parts on the robot skeleton.")
 
+    NVTTPath : bpy.props.StringProperty(name="NVTT Path", default=str(NVTTDefaultPath) if os.path.exists(NVTTDefaultPath) else "", subtype='FILE_PATH',
+                                        description="Path to the Nvidia Texture Tool nvtt_export.exe")
+
     LodDistance0: bpy.props.FloatProperty(name="Lod Distance 0")
     LodDistance1: bpy.props.FloatProperty(name="Lod Distance 1")
     LodDistance2: bpy.props.FloatProperty(name="Lod Distance 2")
@@ -812,6 +923,8 @@ class HZDSettings(bpy.types.PropertyGroup):
     LodDistance14: bpy.props.FloatProperty(name="Lod Distance 14")
     LodDistance15: bpy.props.FloatProperty(name="Lod Distance 15")
     ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False,description="Toggle the extraction of textures. When importing a mesh, texture will be detected and extracted to the Workspace directory.")
+    OverwriteTextures : bpy.props.BoolProperty(name="Overwrite Textures",default=False,description="Overwrite existing textures, when textures will be extracted to the Workspace directory.")
+    KeepDDS : bpy.props.BoolProperty(name="Keep DDS",default=False,description="Keep DDS file, when DDS will be converted to PNG.")
 
 def ParsePosition(f,storageType):
     r = ByteReader
@@ -916,6 +1029,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
     core = HZDEditor.HZDAbsPath
     stream = core+".stream"
 
+    #bpy.ops.wm.console_toggle()
 
     # CREATE COLLECTION TREE #####################
     lodCollection = bpy.context.scene.collection
@@ -1206,9 +1320,16 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
             print("WARNING: Armature not found")
 
     if HZDEditor.ExtractTextures:
-        #TODO need a better way to find that material. LodMeshResource possibly doesn't exist, material is possibly inside Primitive instead of mesh.
-        matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
+        if isLodMesh:
+            #TODO need a better way to find that material. LodMeshResource possibly doesn't exist, material is possibly inside Primitive instead of mesh.
+            if meshType == CullInfo.MeshType.StaticMesh:
+                matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].primitives[primIndex].renderEffectResource
+            else:
+                matblock = asset.LodMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
+        else:
+            matblock = asset.MultiMeshResources[resIndex].meshList[meshIndex].materials[primIndex]
         CreateMaterial(obj,matblock,meshName)
+    #bpy.ops.wm.console_toggle()
 
 def ExtractAsset(assetPath):
 
@@ -1222,154 +1343,80 @@ def ExtractAsset(assetPath):
     HZDEditor.HZDPath = filePath
 
     ReadCoreFile()
-    skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile #TODO should do more checks on here (not sure if static or skinned, not sure if external
-    say(skeletonFile)
+    meshType = asset.LodMeshResources[0].meshBase.drawableCullInfo.meshType
+    if meshType != CullInfo.MeshType.StaticMesh:
+        skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile #TODO should do more checks on here (not sure if static or skinned, not sure if external
+        say(skeletonFile)
 
-    fileSkeletonPath = AM.FindAndExtract(skeletonFile + ".core", False)
-    HZDEditor.SkeletonPath = fileSkeletonPath
+        fileSkeletonPath = AM.FindAndExtract(skeletonFile + ".core", False)
+        HZDEditor.SkeletonPath = fileSkeletonPath
     return
 
-def CreateNormalConverterGroup():
-    # Based on mithkr's node group
-    if bpy.data.node_groups.find("HZD Normal Map Converter") != -1:
-        return
-    group = bpy.data.node_groups.new("HZD Normal Map Converter","ShaderNodeTree")
-    group.inputs.new("NodeSocketFloat","Strength")
-    group.inputs["Strength"].default_value = 1.0
-    group.inputs.new("NodeSocketColor","Image")
-    group.inputs["Image"].default_value = (0.5,0.5,1.0,1.0)
-    group.outputs.new("NodeSocketVector","Normal")
+def LoadNodeGroup(group_name):
+    if bpy.data.node_groups.find(group_name) != -1:
+        return(group_name)
 
-    groupIn = group.nodes.new("NodeGroupInput")
-    groupIn.location = -900,20
-    groupOut = group.nodes.new("NodeGroupOutput")
-    groupOut.location = 1285,100
+    filepath = dict(node_hzdmt_cache())[group_name]
+    with bpy.data.libraries.load(filepath, link=not(group_name.startswith("_"))) as (data_from, data_to):
+        assert(group_name in data_from.node_groups)
+        data_to.node_groups = [group_name]
+    return(group_name)
 
-    #NormalMap
-    normalMap = group.nodes.new("ShaderNodeNormalMap")
-    normalMap.location = 1079,88
-    group.links.new(normalMap.inputs[0],groupIn.outputs[0])
-    group.links.new(groupOut.inputs[0],normalMap.outputs[0])
-
-    #Combine RGB
-    combineRGB = group.nodes.new('ShaderNodeCombineRGB')
-    combineRGB.location = 905,-40
-    group.links.new(normalMap.inputs[1],combineRGB.outputs[0])
-
-    #Separate RGB
-    separateRGB = group.nodes.new('ShaderNodeSeparateRGB')
-    separateRGB.location = -720, -60
-    group.links.new(combineRGB.inputs[0],separateRGB.outputs[0])
-    group.links.new(separateRGB.inputs[0],groupIn.outputs[1])
-
-    #InvertGreen
-    invertGreen = group.nodes.new('ShaderNodeInvert')
-    invertGreen.location = -475, -110
-    group.links.new(combineRGB.inputs[1],invertGreen.outputs[0])
-    group.links.new(invertGreen.inputs[1],separateRGB.outputs[1])
-
-    #SquareRoot
-    squareRoot = group.nodes.new('ShaderNodeMath')
-    squareRoot.operation = "SQRT"
-    squareRoot.location = 725, -140
-    group.links.new(combineRGB.inputs[2],squareRoot.outputs[0])
-
-    #Clamp
-    clamp = group.nodes.new('ShaderNodeClamp')
-    clamp.location = 545, -220
-    group.links.new(squareRoot.inputs[0],clamp.outputs[0])
-
-    #Invert
-    invert = group.nodes.new('ShaderNodeInvert')
-    invert.location = 385, -220
-    group.links.new(clamp.inputs[0], invert.outputs[0])
-
-    #Dot Product
-    dot = group.nodes.new('ShaderNodeVectorMath')
-    dot.operation = "DOT_PRODUCT"
-    dot.location = 225,-220
-    group.links.new(invert.inputs[1],dot.outputs[1])
-
-    #Combine XYZ
-    combineXYZ = group.nodes.new('ShaderNodeCombineXYZ')
-    combineXYZ.location = 60, -220
-    group.links.new(dot.inputs[0],combineXYZ.outputs[0])
-    group.links.new(dot.inputs[1],combineXYZ.outputs[0])
-
-    #Subtract X
-    subtractX = group.nodes.new('ShaderNodeMath')
-    subtractX.operation = 'SUBTRACT'
-    subtractX.inputs[1].default_value = 1.0
-    subtractX.location = -120, -180
-    group.links.new(combineXYZ.inputs[0],subtractX.outputs[0])
-
-    # Subtract Y
-    subtractY = group.nodes.new('ShaderNodeMath')
-    subtractY.operation = 'SUBTRACT'
-    subtractY.inputs[1].default_value = 1.0
-    subtractY.location = -120, -340
-    group.links.new(combineXYZ.inputs[1], subtractY.outputs[0])
-
-    # Multiply X
-    multiplyX = group.nodes.new('ShaderNodeMath')
-    multiplyX.operation = 'MULTIPLY'
-    multiplyX.inputs[1].default_value = 2.0
-    multiplyX.location = -280, -180
-    group.links.new(subtractX.inputs[0], multiplyX.outputs[0])
-    group.links.new(invertGreen.outputs[0],multiplyX.inputs[0])
-
-    # Multiply Y
-    multiplyY = group.nodes.new('ShaderNodeMath')
-    multiplyY.operation = 'MULTIPLY'
-    multiplyY.inputs[1].default_value = 2.0
-    multiplyY.location = -280, -340
-    group.links.new(subtractY.inputs[0], multiplyY.outputs[0])
-    group.links.new(multiplyY.inputs[0],separateRGB.outputs[1])
 def ExtractTexture(outWorkspace,texPath):
     texAs = None
+
     def BuildDDSHeader(tex:Texture) -> bytes:
         r = BytePacker
         data = bytes()
-        flags = b'\x07\x10\x00\x00'
+        flags = b'\x07\x10\x00\x00' # DDSD_CAPS|DDSD_HEIGHT|DDSD_WIDTH|DDSD_PIXELFORMAT
         data += flags
 
-        data += r.uint32(tex.height)
+        data += r.uint32(tex.height * tex.arraySize if tex.type == Texture.TextureType['_2DARRAY'] else tex.height)
         data += r.uint32(tex.width)
-        data += r.uint32(tex.thumbnailLength + tex.streamSize32)
-        data += r.uint32(0)
-        data += r.uint32(tex.mipCount + 1 if hasattr(tex, "mipCount") else 1)
-        data += (b'\x00' * 4) * 11
+        data += r.uint32(tex.thumbnailLength + tex.streamSize32) # pitch
+        data += r.uint32(0) # depth
+        data += r.uint32(tex.mipCount + 1 if hasattr(tex, "mipCount") else 1) # mipmap count
+        data += (b'\x00' * 4) * 11 # reserved
 
-        ddsPF = bytes()
-        ddsPF += r.uint32(32)
-        ddsPF += r.uint32(4)
-        ddsPF += b'DX10'
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
-        ddsPF += r.uint32(0)
+        if tex.format in ddpf_map:
+            pf = ddpf_map[tex.format]
+        else:
+            pf = (DDPF.FOURCC, 0, 0, 0, 0, 0)
+        (flags, bits, rmask, gmask, bmask, amask) = pf
+
+        ddsPF = bytes() # DDS pixel format
+        ddsPF += r.uint32(32) # size
+        ddsPF += r.uint32(flags)  # flags
+        ddsPF += b'DX10' if flags == DDPF.FOURCC else r.uint32(0) # fourcc
+        ddsPF += r.uint32(bits)  # bit count
+        ddsPF += r.uint32(rmask)  # red mask
+        ddsPF += r.uint32(gmask)  # green mask
+        ddsPF += r.uint32(bmask)  # blue mask
+        ddsPF += r.uint32(amask)  # alpha mask
 
         data += ddsPF
-        data += r.uint32(0)
-        data += r.uint32(0)
-        data += r.uint32(0)
-        data += r.uint32(0)
-        data += r.uint32(0)
+        caps = b'\x00\x10\x00\x00' # DDSCAPS_TEXTURE
+        data += caps
+        data += r.uint32(0) # caps2
+        data += r.uint32(0) # caps3
+        data += r.uint32(0) # caps4
+        data += r.uint32(0) # not used
 
-        data = b'DDS ' + r.uint32(len(data)+4) + data
+        data = b'DDS ' + r.uint32(len(data)+4) + data # fourcc + size
 
-        dx10 = b''
-        assert tex.format in format_map, f"Unmapped image format: {tex.format.name}"
-        dx10 += r.uint32(format_map[tex.format].value)
-        dx10 += r.uint32(3)
-        dx10 += r.uint32(0)
-        dx10 += r.uint32(1)
-        dx10 += r.uint32(0)
+        if flags == DDPF.FOURCC:
+            dx10 = b''
+            assert tex.format in format_map, f"Unmapped image format: {tex.format.name}"
+            dx10 += r.uint32(format_map[tex.format].value) # DXGI format
+            dx10 += r.uint32(3) # resource dimension
+            dx10 += r.uint32(0) # misc flag
+            dx10 += r.uint32(1) # array size
+            dx10 += r.uint32(0) # reserved
 
-        data += dx10
+            data += dx10
 
         return data
+
     def ParseTexture(filePath):
         #Parse Extracted Texture core
         with open(filePath,'rb') as f:
@@ -1379,42 +1426,53 @@ def ExtractTexture(outWorkspace,texPath):
         outPath = pathlib.Path(filePath)
         #Extract Stream
         for t in texAs.textures:
-            outImage = outPath.with_name(t.name + ".dds")
-            if os.path.exists(outImage):
+            HZDEditor = bpy.context.scene.HZDEditor
+            ddsImage = outPath.with_name(t.name + ".dds")
+            if os.path.exists(HZDEditor.NVTTPath):
+                outImage = outPath.with_name(t.name + ".png")
+            else:
+                outImage = ddsImage
+
+            if outImage.exists() and not HZDEditor.OverwriteTextures:
                 textureFiles.append(outImage)
             else:
                 streamData = bytes()
                 if t.streamSize32 > 0:
-                    # Check if .stream was already there
-                    if os.path.exists(outWorkspace + texPath+".core.stream"):
-                        streamFilePath = outWorkspace + texPath+".core.stream"
-                    else:
-                        streamFilePath = AM.FindAndExtract(texPath,True)
+                    streamFilePath = AM.FindAndExtract(texPath+".core.stream",True)
                     with open(streamFilePath,'rb') as s:
                         s.seek(t.streamOffset)
                         streamData = s.read(t.streamSize64)
+                        s.close()
 
-                if os.path.exists(outImage):
+                with ddsImage.open(mode='wb') as w:
+                    w.write(BuildDDSHeader(t))
+                    w.write(streamData)
+                    w.write(t.thumbnail)
+                    w.close()
+                    if os.path.exists(HZDEditor.NVTTPath):
+                        if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
+                            from os import environ
+                            env = dict(os.environ)
+                            env['LD_LIBRARY_PATH'] = str(HZDEditor.NVTTPath)[:-12]
+                            subprocess.run([str(HZDEditor.NVTTPath), "-format", "png", str(ddsImage)], env=env)
+                        else:
+                            subprocess.run([str(HZDEditor.NVTTPath), str(ddsImage), "-o", str(outImage)])
+                        if outImage.exists():
+                            if not HZDEditor.KeepDDS:
+                                ddsImage.unlink(missing_ok=True)
+                        else:
+                            outImage = ddsImage
                     textureFiles.append(outImage)
-                else:
-                    with open(outImage,'wb') as w:
-                        w.write(BuildDDSHeader(t))
-                        w.write(streamData)
-                        w.write(t.thumbnail)
-                        textureFiles.append(outImage)
 
     textureFiles = []
     AM = ArchiveManager()
 
-    if os.path.exists(outWorkspace+texPath+".core"):
-        ParseTexture(outWorkspace+texPath+".core")
-    else:
-        #Extract Core
-        filePath = AM.FindAndExtract(texPath,False)
-
-        ParseTexture(filePath)
+    #Extract Core
+    filePath = AM.FindAndExtract(texPath+".core",False)
+    ParseTexture(filePath)
 
     return textureFiles, texAs
+
 def CreateMaterial(obj,matblock,meshName):
     HZDEditor = bpy.context.scene.HZDEditor
 
@@ -1426,7 +1484,7 @@ def CreateMaterial(obj,matblock,meshName):
                  "AO":"Float",  # 5
                  "Roughness":"Float",  # 6
                  "Height":"Float",  # 7
-                 "Mask":"Float",  # 8
+                 "Mask":"Color",  # 8
                  "Mask_Alpha":"Float",  # 9
                  "Incandescence":"Float",  # 10
                  "Translucency_Diffusion":"Float",  # 11
@@ -1434,115 +1492,309 @@ def CreateMaterial(obj,matblock,meshName):
                  "Misc_01":"Float",  # 13
                  "Count":"Float"}  # 14
 
+    BaseTextureOutputs = {"Detail Strength": ("Float", 0.0),
+                 "Fur Mask": ("Float", 0.0),
+                 "Skin Mask": ("Float", 0.0),
+                 "AO": ("Float", 1.0),
+                 "Subsurface": ("Float", 0.0),
+                 "Translucency": ("Float", 0.0),
+                 "Reflectance": ("Float", 0.25),
+                 "Roughness": ("Float", 0.5),
+                 "Alpha": ("Float", 1.0),
+                 "Normal": ("Vector", (0.0,0.0,1.0)),
+                 "Normal Color": ("Color", (0.5,0.5,0.0,1.0)),
+                 "Color": ("Color", (1.0,1.0,1.0,1.0)),
+                 "CID Mask": ("Color", (0.0,0.0,0.0,1.0)),
+                 "Array Mask": ("Float", 0.0)}
 
-    if bpy.data.materials.find(str(matblock.shaderName+"___"+meshName)) == -1:
-        mat = bpy.data.materials.new(name=str(matblock.shaderName+"___"+meshName))
+    BaseTextureBSDFLinks = ("AO",
+                 "Subsurface",
+                 "Translucency",
+                 "Reflectance",
+                 "Alpha")
+
+    DetailTextureOutputs = {"Normal": ("Vector", (0.0,0.0,1.0)),
+                 "Normal Color": ("Color", (0.5,0.5,0.0,1.0)),
+                 "Color": ("Color", (0.5,0.5,0.5,1.0))}
+
+    import hashlib
+    baseTexName = "unknown"
+    for t in matblock.uniqueTextures:
+        if t.startswith('models'):
+            baseTexName = t.split('/')
+            baseTexName = baseTexName[len(baseTexName) - 1]
+            break
+    materialName = baseTexName + "_" +  hashlib.sha224(str(matblock.uniqueTextures).encode("utf8")).hexdigest()[:10]
+
+    frameNodes = {}
+    frame_y = {}
+    if bpy.data.materials.find(materialName) == -1:
+        # Create new material and replace 'Principled BSDF' with 'HZD BSDF'
+        mat = bpy.data.materials.new(name=materialName)
         obj.data.materials.append(mat)
         mat.use_nodes = True
+        mat.node_tree.nodes.remove(mat.node_tree.nodes.get('Principled BSDF'))
+        matNode = mat.node_tree.nodes.get('Material Output')
+        matNode.location = 900.0, 300.0
+
+        bsdfNode = mat.node_tree.nodes.new('ShaderNodeGroup')
+        bsdfNode.node_tree = bpy.data.node_groups[LoadNodeGroup('HZD BSDF')]
+        bsdfNode.width = 250.0
+        bsdfNode.location = 600.0, 300.0
+        mat.node_tree.links.new(bsdfNode.outputs['BSDF'], matNode.inputs['Surface'])
+
+        # Add 'Combine Textures' Node Group and connect with 'HZD BSDF'
+        combineTexNode = mat.node_tree.nodes.new('ShaderNodeGroup')
+        combineTexNode.node_tree = bpy.data.node_groups[LoadNodeGroup('Combine Textures')]
+        combineTexNode.width = 200.0
+        combineTexNode.location = 320.0, -40.0
+        combineTexNode.inputs['Detail Roughness'].hide = True
+        mat.node_tree.links.new(combineTexNode.outputs['Roughness'], bsdfNode.inputs['Roughness'])
+        mat.node_tree.links.new(combineTexNode.outputs['Normal'], bsdfNode.inputs['Normal'])
+        mat.node_tree.links.new(combineTexNode.outputs['Color'], bsdfNode.inputs['Base Color'])
+
+        # Create Frame Node for texture grouping
+        for i,fn in enumerate(('models', 'textures', 'shaders', 'shader_libraries')):
+            frameNodes[fn] = mat.node_tree.nodes.new('NodeFrame')
+            frameNodes[fn].label = fn
+            frameNodes[fn].shrink = True
+            frameNodes[fn].location = -350 if fn == "models" else -350 * i, 220.0 if fn == "models" else -380.0
+            frame_y[fn] = -40.0
+
+        texDetailMapArray = None
+
+        # Iterate through textures
         for i,t in enumerate(matblock.uniqueTextures):
             images,texAsset = ExtractTexture(HZDEditor.WorkAbsPath, t)
+            frameName = t.split('/')[0]
+            if frameName == 'models':
+                tiling = False
+            else:
+                tiling = True
 
             if texAsset.texSet is not None:
 
-                # Create Node Group
-                imageName = t.split('/')
-                imageName= imageName[len(imageName) - 1]
-                texSetGroup = bpy.data.node_groups.new(imageName,"ShaderNodeTree")
-                texSetGroup_output = texSetGroup.nodes.new("NodeGroupOutput")
+                groupName = t.split('/')
+                groupName = groupName[len(groupName) - 1]
+                groupHash = hashlib.sha224(t.encode("utf8")).hexdigest()[:10]
+                if len(images) > 2 or groupName == baseTexName:
+                    groupOutputs = BaseTextureOutputs
+                else:
+                    groupOutputs = DetailTextureOutputs
+                print(frameName, groupName, groupHash)
 
-                for ii, setT in enumerate(texAsset.texSet.textures):
-                    # Create Image Node
-                    texNode = texSetGroup.nodes.new('ShaderNodeTexImage')
-                    texNode.name = t
-                    texNode.label = imageName
-                    texNode.location = -400, -250 * ii + len(images) * 125
-                    bpy.data.images.load(str(images[ii]))
-                    texNode.image = bpy.data.images[images[ii].name]
-                    texNode.image.colorspace_settings.name = "Non-Color"
-                    print(imageName)
+                if bpy.data.node_groups.find(groupName) == -1:
+                    # Create Node Group for texture set
+                    offset_x = 250.0
+                    offset_y = 0.0
+                    texSetGroup = bpy.data.node_groups.new(groupName,"ShaderNodeTree")
 
+                    # Outputs
+                    texSetGroup_output = texSetGroup.nodes.new("NodeGroupOutput")
+                    for out in groupOutputs:
+                        texSetGroup.outputs.new("NodeSocket" + groupOutputs[out][0], out)
+                        texSetGroup.outputs[out].default_value = groupOutputs[out][1]
+                        texSetGroup_output.inputs[out].hide = True
+                    texSetGroup_output.location = offset_x + 10.0, offset_y + 30.0
 
-                    # RGB CHANNEL OUTPUT
-                    if all(cha.usageType == setT.channelTypes[0].usageType for cha in setT.channelTypes[0:3]):
-                        # no need to break the color
-                        if setT.channelTypes[0].usageType == "Color":
-                            texNode.image.colorspace_settings.name = "sRGB"
-                        outputType = UsageType_ValueMap[setT.channelTypes[0].usageType]
-                        texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
-                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[0])
+                    # Inputs
+                    if tiling:
+                        # Create 'Texture Coordinate' and 'Mapping' to scale textures with 'Tiling' input value
+                        texSetGroup.inputs.new("NodeSocketFloat", "Tiling")
+                        texSetGroup.inputs["Tiling"].default_value = 20.0
+                        texSetGroup.inputs["Tiling"].min_value = 0.0
+                        texSetGroup_input = texSetGroup.nodes.new("NodeGroupInput")
+                        texSetGroup_input.location = offset_x - 900.0, offset_y - 250.0
+                        coordNode = texSetGroup.nodes.new('ShaderNodeTexCoord')
+                        coordNode.location = offset_x - 900.0, offset_y
+                        mappingNode = texSetGroup.nodes.new('ShaderNodeMapping')
+                        mappingNode.location = offset_x - 700.0, offset_y
+                        texSetGroup.links.new(texSetGroup_input.outputs['Tiling'], mappingNode.inputs['Scale'])
+                        texSetGroup.links.new(coordNode.outputs['UV'], mappingNode.inputs['Vector'])
 
-                    elif all(cha.usageType == "Normal" for cha in setT.channelTypes[0:2]):
-                        # Normal Map
-                        CreateNormalConverterGroup()
-                        normalConverter = texSetGroup.nodes.new("ShaderNodeGroup")
-                        normalConverter.node_tree = bpy.data.node_groups["HZD Normal Map Converter"]
-                        texNode.location = texNode.location[0] - 400, texNode.location[1]  # move to the left
-                        normalConverter.location = texNode.location[0] + 400, texNode.location[1]
-                        texSetGroup.outputs.new('NodeSocketVector',"Normal")
-                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],normalConverter.outputs[0])
-                        texSetGroup.links.new(normalConverter.inputs[1],texNode.outputs[0])
-                        #Blue channel
-                        sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
-                        sepRGBNode.location = texNode.location[0] + 400, texNode.location[1]-140
-                        texSetGroup.outputs.new('NodeSocketFloat', setT.channelTypes[2].usageType)
+                    for ii, setT in enumerate(texAsset.texSet.textures):
+                        # Create Image Node
+                        texName = groupName + "%02d" % ii
+                        print("  " + texName)
+                        for cha in setT.channelTypes:
+                            print("    " + cha.usageType)
+                        texNode = texSetGroup.nodes.new('ShaderNodeTexImage')
+                        texNode.location = offset_x - 500.0, offset_y - 50.0 * ii
+                        if tiling:
+                            texSetGroup.links.new(mappingNode.outputs['Vector'], texNode.inputs['Vector'])
+                        # Load image if not yet exists
+                        texNode.image = bpy.data.images.get(images[ii].name, None)
+                        if texNode.image is None:
+                            texNode.image = bpy.data.images.load(str(images[ii]))
+                        texNode.image.colorspace_settings.name = "Non-Color"
+                        texNode.hide = True
 
-                        texSetGroup.links.new(sepRGBNode.inputs[0],texNode.outputs[0])
-                        if setT.channelTypes[2].usageType == "Roughness":
-                            invert = texSetGroup.nodes.new("ShaderNodeInvert")
-                            invert.location = texNode.location[0] + 400, texNode.location[1]-280
-                            texSetGroup.links.new(invert.inputs[1],sepRGBNode.outputs[2])
-                            texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],invert.outputs[0])
-                        else:
-                            texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],sepRGBNode.outputs[2])
+                        # RGB CHANNEL OUTPUT
+                        if all(cha.usageType == "Normal" for cha in setT.channelTypes[0:2]):
+                            # Normal Map
+                            normalConverter = texSetGroup.nodes.new("ShaderNodeGroup")
+                            normalConverter.node_tree = bpy.data.node_groups[LoadNodeGroup("HZD Normal Map Converter")]
+                            normalConverter.location = offset_x - 200.0, texNode.location[1] if tiling else offset_y - 50 * len(images)
+                            normalConverter.hide = True
+                            normalConverter.inputs['Strength'].hide = True
+                            texSetGroup.links.new(texNode.outputs['Color'], normalConverter.inputs['Color'])
+                            texSetGroup.links.new(normalConverter.outputs['Normal'], texSetGroup_output.inputs['Normal'])
+                            texSetGroup.links.new(normalConverter.outputs['Normal Color'], texSetGroup_output.inputs['Normal Color'])
+                            if not setT.channelTypes[2].usageType == "Normal" and setT.channelTypes[2].usageType != "Invalid":
+                                # Blue channel
+                                sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
+                                if tiling:
+                                    normalConverter.location = offset_x - 200.0, texNode.location[1] + 20.0
+                                    sepRGBNode.location = offset_x - 200.0, texNode.location[1] - 20.0
+                                else:
+                                    sepRGBNode.location = offset_x - 200.0, texNode.location[1]
+                                sepRGBNode.label = "Separate B"
+                                sepRGBNode.hide = True
+                                sepRGBNode.outputs['R'].hide = True
+                                sepRGBNode.outputs['G'].hide = True
+                                if not texSetGroup.outputs.get(setT.channelTypes[2].usageType):
+                                    texSetGroup.outputs.new('NodeSocketFloat', setT.channelTypes[2].usageType)
+                                texSetGroup.links.new(texNode.outputs['Color'], sepRGBNode.inputs['Image'])
+                                texSetGroup.links.new(sepRGBNode.outputs['B'], texSetGroup_output.inputs[setT.channelTypes[2].usageType])
 
-                    else:
-                        texNode.location = texNode.location[0] - 400, texNode.location[1]  # move to the left
-                        sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
-                        sepRGBNode.location = texNode.location[0] + 400, texNode.location[1]
-                        for ic,cha in enumerate(setT.channelTypes[0:3]):
-                            if cha.usageType == "Invalid":
-                                pass
-                            elif cha.usageType == "Roughness":
-                                invert = texSetGroup.nodes.new("ShaderNodeInvert")
-                                invert.location = texNode.location[0] + 400, texNode.location[1] - 280
-                                texSetGroup.links.new(invert.inputs[1], sepRGBNode.outputs[ic])
-                                texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
-                                texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs) - 2],sepRGBNode.outputs[ic])
+                        elif all(cha.usageType == setT.channelTypes[0].usageType for cha in setT.channelTypes[0:3]):
+                            # no need to break the color
+                            if setT.channelTypes[0].usageType == "Color":
+                                texNode.image.colorspace_settings.name = "Non-Color" if groupOutputs == DetailTextureOutputs else "sRGB"
+                            if setT.channelTypes[0].usageType == "Misc_01":
+                                # Separate Misc_01
+                                separateMisc = texSetGroup.nodes.new("ShaderNodeGroup")
+                                separateMisc.node_tree = bpy.data.node_groups[LoadNodeGroup("Separate Misc_01")]
+                                separateMisc.location = offset_x - 200.0, offset_y + 40.0
+                                separateMisc.hide = True
+                                texSetGroup.links.new(texNode.outputs['Color'], separateMisc.inputs['Color'])
+                                for out in separateMisc.outputs:
+                                  texSetGroup.links.new(separateMisc.outputs[out.name], texSetGroup_output.inputs[out.name])
                             else:
-                                # we gotta separate RGB
-                                texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
+                                outputType = UsageType_ValueMap[setT.channelTypes[0].usageType]
+                                if setT.channelTypes[0].usageType == "Mask" and groupOutputs == BaseTextureOutputs:
+                                    setT.channelTypes[0].usageType = "CID Mask"
+                                if not texSetGroup.outputs.get(setT.channelTypes[0].usageType):
+                                    texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
+                                texSetGroup.links.new(texNode.outputs['Color'], texSetGroup_output.inputs[setT.channelTypes[0].usageType])
 
-                                texSetGroup.links.new(sepRGBNode.inputs[0], texNode.outputs[0])
-                                texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],sepRGBNode.outputs[ic])
+                        else:
+                            sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
+                            sepRGBNode.location = offset_x - 200.0, texNode.location[1]
+                            sepRGBNode.label = "Separate "
+                            sepRGBNode.hide = True
+                            texSetGroup.links.new(texNode.outputs['Color'], sepRGBNode.inputs['Image'])
+                            for ic,cha in enumerate(setT.channelTypes[0:3]):
+                                sepRGBNode.outputs[ic].hide = True
+                                if cha.usageType == "Invalid":
+                                    pass
+                                else:
+                                    # we gotta separate RGB
+                                    if groupOutputs == BaseTextureOutputs and texDetailMapArray != None:
+                                        if cha.usageType == "Mask":
+                                            cha.usageType = "Array Mask"
+                                        if cha.usageType == "Mask_Alpha":
+                                            cha.usageType = "Detail Strength"
+                                    sepRGBNode.label += "RGB"[ic]
+                                    if not texSetGroup.outputs.get(cha.usageType):
+                                        texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
+                                    texSetGroup.links.new(sepRGBNode.outputs[ic], texSetGroup_output.inputs[cha.usageType])
 
+                        # ALPHA CHANNEL OUTPUT
+                        if setT.channelTypes[3].usageType in ("Invalid","Normal","Mask","Reflectance","Misc_01"):
+                            pass
+                        else:
+                            if setT.channelTypes[3].usageType == "Mask_Alpha" and groupOutputs == BaseTextureOutputs and texDetailMapArray != None:
+                                usageType = "Detail Strength"
+                            else:
+                                usageType = setT.channelTypes[3].usageType
+                            if not texSetGroup.outputs.get(usageType):
+                                texSetGroup.outputs.new("NodeSocketFloat", usageType)
+                            texSetGroup.links.new(texNode.outputs['Alpha'], texSetGroup_output.inputs[usageType])
 
+                        if any(cha.usageType == "Alpha" for cha in setT.channelTypes):
+                            mat.blend_method = "BLEND"
+                            print("enable Alpha Blend for Eevee")
 
-                    # ALPHA CHANNEL OUTPUT
-                    if setT.channelTypes[3].usageType in ("Invalid","Normal"):
-                        pass
-                    else:
-                        texSetGroup.outputs.new("NodeSocketFloat", setT.channelTypes[3].usageType)
-                        texSetGroup.links.new(texSetGroup_output.inputs[len(texSetGroup_output.inputs)-2],texNode.outputs[1])
-
+                # Add texture set Node Group
                 shaderGroup = mat.node_tree.nodes.new("ShaderNodeGroup")
-                shaderGroup.node_tree = bpy.data.node_groups[texSetGroup.name]
-                shaderGroup.location = -400,-300*i+600
+                shaderGroup.parent = frameNodes[frameName]
+                shaderGroup.node_tree = bpy.data.node_groups[groupName]
+                shaderGroup.location = 0.0, frame_y[frameName]
+                shaderGroup.width = 200.0
+                shaderGroup.hide = (frameName != "models")
+                frame_y[frameName] -= 50.0 - 450.0*(frameName == "models")
 
-
+                # Link BaseTexture to BSDF
+                texSetGroup_output = shaderGroup.node_tree.nodes['Group Output']
+                for out in texSetGroup_output.inputs:
+                    if out.name and not out.is_linked:
+                        shaderGroup.outputs[out.name].hide = True
+                if groupOutputs == BaseTextureOutputs:
+                    for out in BaseTextureBSDFLinks:
+                        if texSetGroup_output.inputs[out].is_linked:
+                            mat.node_tree.links.new(shaderGroup.outputs[out], bsdfNode.inputs[out])
+                    if texSetGroup_output.inputs['Detail Strength'].is_linked:
+                        mat.node_tree.links.new(shaderGroup.outputs['Detail Strength'], combineTexNode.inputs['Fac'])
+                    mat.node_tree.links.new(shaderGroup.outputs['Roughness'], combineTexNode.inputs['Base Roughness'])
+                    mat.node_tree.links.new(shaderGroup.outputs['Normal Color'], combineTexNode.inputs['Base Normal'])
+                    mat.node_tree.links.new(shaderGroup.outputs['Color'], combineTexNode.inputs['Base Color'])
+                    if texSetGroup_output.inputs['Array Mask'].is_linked and texDetailMapArray != None:
+                        mat.node_tree.links.new(shaderGroup.outputs['Array Mask'], texDetailMapArray.inputs['Mask'])
+                    elif texSetGroup_output.inputs['CID Mask'].is_linked or texSetGroup_output.inputs['Skin Mask'].is_linked:
+                    # Add 'Combine Detail Textures' Node Group and connect with 'Combine Textures'
+                        combineDetailNode = mat.node_tree.nodes.new('ShaderNodeGroup')
+                        combineDetailNode.node_tree = bpy.data.node_groups[LoadNodeGroup('Combine Detail Textures')]
+                        combineDetailNode.width = 250.0
+                        combineDetailNode.location = -10.0, -250.0
+                        mat.node_tree.links.new(combineDetailNode.outputs['Normal Color'], combineTexNode.inputs['Detail Normal'])
+                        mat.node_tree.links.new(combineDetailNode.outputs['Detail Color'], combineTexNode.inputs['Detail Color'])
+                    if texSetGroup_output.inputs['CID Mask'].is_linked:
+                        mat.node_tree.links.new(shaderGroup.outputs['CID Mask'], combineDetailNode.inputs['CID Mask'])
+                    if texSetGroup_output.inputs['Skin Mask'].is_linked:
+                        mat.node_tree.links.new(shaderGroup.outputs['Color'], bsdfNode.inputs['Subsurface Color'])
+                        mat.node_tree.links.new(shaderGroup.outputs['Skin Mask'], combineDetailNode.inputs['Skin Mask'])
 
             else:
                 for ii, image in enumerate(images):
-                    texNode = mat.node_tree.nodes.new('ShaderNodeTexImage')
-                    texNode.name = t
-                    imageName = t.split('/')
-                    texNode.label = imageName[len(imageName)-1]
-                    texNode.location = -400*ii-400,-300*i+600
-                    bpy.data.images.load(str(image))
-                    texNode.image = bpy.data.images[image.name]
+                    texName = t.split('/')
+                    texName = texName[len(texName)-1]
+                    texHash = hashlib.sha224(t.encode("utf8")).hexdigest()[:10]
+                    print(frameName, texName, texHash)
+                    #pdb.set_trace()
+                    if texAsset.textures[0].type == Texture.TextureType['_2DARRAY']:
+                        texDetailMapArray = mat.node_tree.nodes.new("ShaderNodeGroup")
+                        if bpy.data.node_groups.find(texName) == -1:
+                            texDetailMapArray.node_tree = bpy.data.node_groups[LoadNodeGroup("_DetailMapArrayTemplate")]
+                            texDetailMapArray.node_tree.name = texName
+                        else:
+                            texDetailMapArray.node_tree = bpy.data.node_groups[texName]
+                        texDetailMapArray.width = 250.0
+                        texDetailMapArray.location = -10.0, -250.0
+                        #texDetailMapArray.parent = frameNodes[frameName]
+                        #texDetailMapArray.location = 0.0, frame_y[frameName]
+                        #texDetailMapArray.hide = True
+                        texNode = texDetailMapArray.node_tree.nodes['Image Texture']
+                        mat.node_tree.links.new(texDetailMapArray.outputs['Roughness'], combineTexNode.inputs['Detail Roughness'])
+                        mat.node_tree.links.new(texDetailMapArray.outputs['Normal Color'], combineTexNode.inputs['Detail Normal'])
+                        mat.node_tree.links.new(texDetailMapArray.outputs['Color'], combineTexNode.inputs['Detail Color'])
+                    else:
+                        # Create Image Node
+                        texNode = mat.node_tree.nodes.new('ShaderNodeTexImage')
+                        texNode.parent = frameNodes[frameName]
+                        texNode.location = 0.0, frame_y[frameName]
+                        frame_y[frameName] -= 50.0
+
+                    texNode.image = bpy.data.images.get(image.name, None)
+                    # Load image if not yet exists
+                    if texNode.image is None:
+                        texNode.image = bpy.data.images.load(str(image))
+                    texNode.image.colorspace_settings.name = "Non-Color"
+                    texNode.hide = True
 
     else:
         say("Material already exists")
-        mat = bpy.data.materials[matblock.shaderName+"___"+meshName]
+        mat = bpy.data.materials[materialName]
         obj.data.materials.append(mat)
 
 def CreateSkeleton():
@@ -2082,7 +2334,7 @@ class DataBlock:
         if self.guid == expectedGUID:
             return
         else:
-            raise Exception("%s  --  Invalid Block GUID: got %s expected %s"%(self.__class__.__name__,str(self.guid.hex()) ,str(expectedGUID)))
+            raise Exception("%s  --  Invalid Block GUID: got %s expected %s"%(self.__class__.__name__,str(self.guid.hex()) ,str(expectedGUID.hex())))
     def EndBlock(self,f):
         f.seek(self.blockStartOffset + self.size)
 
@@ -2137,7 +2389,7 @@ class TextureSet(DataBlock):
             f.seek(4,1)
             refType = r.uint8(f)
             if refType > 0:
-                self.textureRef = r.uuid(f)
+                self.textureRef = r.guid(f)
             elif refType in [2,3]:
                 self.textureRef = r.hashtext(f)
 
@@ -2229,25 +2481,30 @@ class Texture(DataBlock):
         BC6U = 0x49,
         BC6S = 0x4A,
         BC7 = 0x4B
+    class TextureType(IntEnum):
+        _2D = 0x0,
+        _3D = 0x1,
+        CUBE_MAP = 0x2,
+        _2DARRAY = 0x3
     def __init__(self,f):
         super().__init__(f)
         r = ByteReader
         self.name = r.hashtext(f)
-        f.seek(2,1)
+        self.type : Texture.TextureType = self.TextureType(r.uint16(f))
         width = r.uint16(f)
         self.width = width & 0x3FFF
         height = r.uint16(f)
         self.height = height & 0x3FFF
-        f.seek(2,1)
+        self.arraySize = r.uint16(f)
         f.seek(1,1)
         self.format : Texture.PixelFormat = self.PixelFormat(r.uint8(f))
         f.seek(2,1)
         f.seek(20,1)
-        self.imageChunkSize= r.int32(f)
-        self.thumbnailLength = r.int32(f)
-        self.streamSize32 = r.int32(f)
-        self.mipCount = r.int32(f)
+        self.imageChunkSize= r.uint32(f)
+        self.thumbnailLength = r.uint32(f)
+        self.streamSize32 = r.uint32(f)
         if self.streamSize32 > 0:
+            self.mipCount = r.uint32(f)
             self.streamPath = r.path(f) [6:] #remove "cache:"
             self.streamOffset = r.uint64(f)
             self.streamSize64 = r.uint64(f)
@@ -2257,6 +2514,7 @@ class Texture(DataBlock):
         self.thumbnail = f.read(self.thumbnailLength)
 
         self.EndBlock(f)
+
 format_map: Dict[Texture.PixelFormat, DXGI] = {
     Texture.PixelFormat.INVALID: DXGI.DXGI_FORMAT_UNKNOWN,
     # Texture.PixelFormat.RGBA_5551: ,
@@ -2271,7 +2529,7 @@ format_map: Dict[Texture.PixelFormat, DXGI] = {
     # Texture.PixelFormat.RGB_565_REV: ,
     # Texture.PixelFormat.RGB_555: ,
     # Texture.PixelFormat.RGB_555_REV: ,
-    Texture.PixelFormat.RGBA_8888: DXGI.DXGI_FORMAT_R8G8B8A8_TYPELESS,
+    Texture.PixelFormat.RGBA_8888: DXGI.DXGI_FORMAT_R8G8B8A8_UNORM,
     # Texture.PixelFormat.RGBA_8888_REV: ,
     # Texture.PixelFormat.RGBE_REV: ,
     Texture.PixelFormat.RGBA_FLOAT_32: DXGI.DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -2335,6 +2593,23 @@ format_map: Dict[Texture.PixelFormat, DXGI] = {
     Texture.PixelFormat.BC6U: DXGI.DXGI_FORMAT_BC6H_UF16,
     Texture.PixelFormat.BC6S: DXGI.DXGI_FORMAT_BC6H_SF16,
     Texture.PixelFormat.BC7: DXGI.DXGI_FORMAT_BC7_UNORM
+}
+
+ddpf_map: Dict[Texture.PixelFormat, list] = {
+    Texture.PixelFormat.RGB_888:        ( DDPF.RGB,                  24, 0xFF,       0xFF00,     0xFF0000,   0 ),
+    Texture.PixelFormat.RGB_888_REV:    ( DDPF.RGB,                  24, 0xFF0000,   0xFF00,     0xFF,       0 ),
+    Texture.PixelFormat.RGB_888_32:     ( DDPF.RGB,                  32, 0xFF,       0xFF00,     0xFF0000,   0 ),
+    Texture.PixelFormat.RGB_888_32_REV: ( DDPF.RGB,                  32, 0xFF0000,   0xFF00,     0xFF,       0 ),
+    Texture.PixelFormat.RGBA_8888:      ( DDPF.RGB|DDPF.ALPHAPIXELS, 32, 0xFF,       0xFF00,     0xFF0000,   0xFF000000 ),
+    Texture.PixelFormat.RGBA_8888_REV:  ( DDPF.RGB|DDPF.ALPHAPIXELS, 32, 0xFF0000,   0xFF00,     0xFF,       0xFF000000 ),
+    Texture.PixelFormat.RGB_565_REV:    ( DDPF.RGB,                  16, 0xF800,     0x7E0,      0x1F,       0 ),
+    Texture.PixelFormat.RGB_555_REV:    ( DDPF.RGB,                  16, 0x7C00,     0x3E0,      0x1F,       0 ),
+    Texture.PixelFormat.RGBA_5551_REV:  ( DDPF.RGB|DDPF.ALPHAPIXELS, 16, 0x7C00,     0x3E0,      0x1F,       0x8000 ),
+    Texture.PixelFormat.RGBA_4444_REV:  ( DDPF.RGB|DDPF.ALPHAPIXELS, 16, 0xF00,      0xF0,       0xF,        0xF000 ),
+    Texture.PixelFormat.R_UNORM_8:      ( DDPF.LUMINANCE,             8, 0xFF,       0,          0,          0 ),
+    Texture.PixelFormat.R_UNORM_16:     ( DDPF.LUMINANCE,            16, 0xFFFF,     0,          0,          0 ),
+    Texture.PixelFormat.RG_UNORM_8:     ( DDPF.RGB,                  16, 0xFF,       0xFF00,     0,          0 ),
+    Texture.PixelFormat.RG_UNORM_16:    ( DDPF.RGB,                  32, 0xFFFF,     0xFFFF0000, 0,          0 ),
 }
 
 class Bone:
@@ -3156,12 +3431,17 @@ class HZDPanel(bpy.types.Panel):
         row.prop(HZDEditor, "SkeletonPath")
 
         row = layout.row()
+        row.prop(HZDEditor, "NVTTPath")
+
+        row = layout.row()
         row.operator("object.hzd_offsets", icon='ZOOM_ALL')
         if Asset:
             row = layout.row()
             row.operator("object.import_skt",icon="ARMATURE_DATA")
             row = layout.row()
             row.prop(HZDEditor,"ExtractTextures")
+            row.prop(HZDEditor,"OverwriteTextures")
+            row.prop(HZDEditor,"KeepDDS")
             row = layout.row()
             row.operator("object.import_all",icon="OUTLINER_OB_LIGHTPROBE")
         mainRow = layout.row()
@@ -3201,8 +3481,8 @@ class MultiMeshPanel(bpy.types.Panel):
         if asset:
             layout = self.layout
             HZDEditor = context.scene.HZDEditor
-            mainRow = layout.row()
             for imm, mm in enumerate(asset.MultiMeshResources):
+                mainRow = layout.row()
                 box = mainRow.box()
                 box.label(text="MULTI MESH", icon='SNAP_VOLUME')
                 for il, l in enumerate(mm.meshList):
@@ -3398,7 +3678,7 @@ class SingularMeshPanel(bpy.types.Panel):
                     row.label(text="Not able to Import for now.")
 
 classes=[ImportHZD,
-        ImportAll,
+         ImportAll,
          ImportLodHZD,
          ImportSkeleton,
          ExportHZD,
@@ -3412,15 +3692,20 @@ classes=[ImportHZD,
          LodGroupPanel,
          ShowUsedTextures,
          ExtractHZDAsset,
-         SingularMeshPanel]
+         SingularMeshPanel,
+         NODE_OT_HZDMT_add,
+         NODE_MT_HZDMT_add]
 
 def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.HZDEditor = bpy.props.PointerProperty(type=HZDSettings)
+    bpy.types.NODE_MT_add.append(add_node_button)
 
 def unregister():
     for c in classes:
         bpy.utils.unregister_class(c)
+    bpy.types.NODE_MT_add.remove(add_node_button)
+
 if __name__ == "__main__":
     register()

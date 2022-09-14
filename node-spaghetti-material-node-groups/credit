@@ -1,0 +1,7 @@
+Node Groups based on:
+https://blog.selfshadow.com/publications/blending-in-detail/
+https://blog.selfshadow.com/sandbox/normals.html
+https://blender.stackexchange.com/questions/51294/how-to-weaken-or-strengthen-a-normal-map-texture/51315#51315
+
+Origin normalMap_nodeGroups.blend is from:
+https://gitlab.com/josephbburg/node-spaghetti-material-node-groups
