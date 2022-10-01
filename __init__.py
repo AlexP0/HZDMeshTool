@@ -8,10 +8,10 @@ bl_info = {
     "category": "Import-Export"
     }
 
-
 if "bpy" in locals():
-    import imp
-    imp.reload(pymmh3)
+    # import imp
+    # imp.reload(pymmh3)
+    import pymmh3
 else:
     from . import pymmh3
 
@@ -547,6 +547,7 @@ def ClearProperties(self,context):
     HZDEditor.WorkAbsPath = bpy.path.abspath(HZDEditor.WorkPath)
     HZDEditor.SkeletonAbsPath = bpy.path.abspath(HZDEditor.SkeletonPath)
     # HZDEditor.SkeletonName = "Unknown Skeleton: Import Skeleton to set."
+    HZDEditor.ModelHelpersPath = ""
     BoneMatrices.clear()
     return None
 class ByteReader:
@@ -658,9 +659,9 @@ class ByteReader:
         return int16 / 2 ** 16
     @staticmethod
     def uint8Norm(f):
-        int16 = unpack('<B', f.read(1))[0]
-        maxint = 2 ** 8
-        return int16 / maxint
+        uint8 = unpack('<B', f.read(1))[0]
+        maxint = (2 ** 8)-1
+        return uint8 / maxint
     @staticmethod
     def X10Y10Z10W2Normalized(f):
         i = unpack('<I', f.read(4))[0]  # get 32bits of data
@@ -723,10 +724,10 @@ class BytePacker:
     @staticmethod
     def uint8Norm(v):
         if 0.0 <= v <= 1.0:
-            i = int(v * (2 ** 8))
+            i = int(v * ((2 ** 8)-1))
         else:
             raise Exception("Couldn't normalize value as uint16Norm, "
-                            "it wasn't between -1.0 and 1.0. Unknown max value."
+                            "it wasn't between 0.0 and 1.0. Unknown max value."
                             +str(v))
         return pack('<B', i)
     @staticmethod
@@ -849,6 +850,16 @@ def CopyFile(read,write,offset,size,buffersize=500000):
         write.write(read.read(buffersize))
     write.write(read.read(size%buffersize))
 
+def Compare4x4Matrices(matrixA,matrixB):
+    for i in range(4):
+        rowA = matrixA[i]
+        rowB = matrixB[i]
+        for x in range(4):
+            colA = rowA[x]
+            colB = rowB[x]
+            if abs(colA-colB) > 0.002:
+                return False
+    return True
 def Parse4x4Matrix(f):
     r = ByteReader
     row1 = []
@@ -899,7 +910,7 @@ class HZDSettings(bpy.types.PropertyGroup):
     SkeletonAbsPath : bpy.props.StringProperty()
     SkeletonName: bpy.props.StringProperty(name="Skeleton Name") #DEPRECATED
 
-    ModelHelpersPath : bpy.props.StringProperty(name="Model Helpers",subtype='FILE_PATH', update=ClearProperties,
+    ModelHelpersPath : bpy.props.StringProperty(name="Model Helpers",subtype='FILE_PATH',
                                            description="Path to the robot_modelhelpers.core file. If not set the tool will try to extract it for you.\n"
                                                        "This is used for placing detachable parts on the robot skeleton.")
 
@@ -1077,23 +1088,13 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
             if type(o.data) == bpy.types.Armature:
                 if o.data.name == armatureHash:
                     armature = o
+                    UpdateSkeleton(armature)
         if armature is None:
             print("IMPORT MESH: Skeleton object not found")
             armature = CreateSkeleton()
 
         # Get every bone name because blender's bone indices don't match HZD
-        with open(HZDEditor.SkeletonAbsPath, 'rb') as f:
-            f.seek(28)
-            sktNameSize = r.int32(f)
-            f.seek(4, 1)
-            sktName = r.string(f, sktNameSize)
-            boneCount = r.int32(f)
-            for b in range(boneCount):
-                boneNameSize = r.int32(f)
-                f.seek(4, 1)
-                boneName = r.string(f, boneNameSize)
-                f.seek(6, 1)
-                HZDBones.append(boneName)
+        HZDBones = GetSkeletonBonesAndParents(HZDEditor.SkeletonAbsPath)[1]
         # Create vertex Groups
         for bone in HZDBones:
             obj.vertex_groups.new(name=bone)
@@ -1209,12 +1210,19 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
                         loop[uv_layer].uv = ParseUVChannel(f,ei.storageType)
             elif ei.elementType == et.Color:
                 print("     Importing Vertex Color")
-                color_layer = bm.loops.layers.color.new("Color")
-                for finder,face in enumerate(bm.faces):
-                    for lider, loop in enumerate(face.loops):
-                        vindex = loop.vert.index
-                        f.seek(us.streamAbsOffset+us.stride*vindex+ei.offset)
-                        loop[color_layer] = ParseVertexColor(f,ei.storageType)
+
+                color_layer = bm.verts.layers.float_color.new("Color")
+                for v in bm.verts:
+                    f.seek(us.streamAbsOffset+us.stride*v.index+ei.offset)
+                    v[color_layer] = ParseVertexColor(f,ei.storageType)
+
+                #Import Vertex Color as FaceCorner Byte colors
+                # color_layer = bm.loops.layers.color.new("Color")
+                # for finder,face in enumerate(bm.faces):
+                #     for lider, loop in enumerate(face.loops):
+                #         vindex = loop.vert.index
+                #         f.seek(us.streamAbsOffset+us.stride*vindex+ei.offset)
+                #         loop[color_layer] = ParseVertexColor(f,ei.storageType)
             else:
                 print("     ElementType not supported: ",ei.elementType)
         bm.to_mesh(mesh)
@@ -1797,48 +1805,56 @@ def CreateMaterial(obj,matblock,meshName):
         mat = bpy.data.materials[materialName]
         obj.data.materials.append(mat)
 
+def GetSkeletonReference():
+    if asset.skeletonPath != "":
+        return asset.skeletonPath + ".core"
+    else:
+        return False
+def FindExtractSkeletonFile(skeletonRef):
+    HZDEditor = bpy.context.scene.HZDEditor
+    AM = ArchiveManager()
+    fileSkeletonPath = AM.FindAndExtract(skeletonRef, False)
+    HZDEditor.SkeletonPath = fileSkeletonPath
+    return HZDEditor.SkeletonAbsPath
+def GetSkeletonBonesAndParents(skeletonPath):
+    r = ByteReader
+    Bones = []
+    ParentIndices = []
+    with open(skeletonPath, 'rb') as f:
+        f.seek(28)
+        sktNameSize = r.int32(f)
+        f.seek(4, 1)
+        sktName = r.string(f, sktNameSize)
+        boneCount = r.int32(f)
+        for b in range(boneCount):
+            boneNameSize = r.int32(f)
+            f.seek(4, 1)
+            boneName = r.string(f, boneNameSize)
+            f.seek(4, 1)
+            parentIndex = r.int16(f)
+            Bones.append(boneName)
+            ParentIndices.append(parentIndex)
+    return sktName,Bones,ParentIndices
+
 def CreateSkeleton():
     r = ByteReader
     HZDEditor = bpy.context.scene.HZDEditor
-    SkeletonPath = HZDEditor.SkeletonAbsPath
-    skeletonFile = ""
-    if len(asset.LodMeshResources) > 0:
-        if asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile:
-            skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile
-            skeletonFile += ".core"
-            print("Create Skeleton: Skeleton reference found -> ", skeletonFile)
-        else:
-            print("Create Skeleton: Could not find skeleton reference")
-            return #failed to find skeleton path string for hash reference. The skeleton data wouldn't have a proper name.
+    SkeletonPath = HZDEditor.SkeletonAbsPath #path to real file on disk
+    skeletonFile = GetSkeletonReference() #path to game asset
+    if skeletonFile:
+        print("Create Skeleton: Skeleton reference found -> ", skeletonFile)
+    else:
+        print("Create Skeleton: Could not find skeleton reference")
+        return #failed to find skeleton path string for hash reference. The skeleton data wouldn't have a proper name.
+
     if SkeletonPath == "" and skeletonFile != "":
         print("Create Skeleton: Skeleton Path not specified, extracting from reference...")
-        AM = ArchiveManager()
-        fileSkeletonPath = AM.FindAndExtract(skeletonFile, False)
-        HZDEditor.SkeletonPath = fileSkeletonPath
-        SkeletonPath = HZDEditor.SkeletonAbsPath
+        SkeletonPath = FindExtractSkeletonFile(skeletonFile)
         print("Create Skeleton: Skeleton Path = ",SkeletonPath)
 
     if SkeletonPath != "" and skeletonFile != "":
         print("Create Skeleton: Paths are valid, starting to create skeleton...")
-        Bones = []
-        ParentIndices = []
-
-        with open(SkeletonPath,'rb') as f:
-            f.seek(28)
-            sktNameSize = r.int32(f)
-            f.seek(4,1)
-            sktName = r.string(f,sktNameSize)
-            boneCount = r.int32(f)
-            # print(boneCount)
-            for b in range(boneCount):
-                boneNameSize = r.int32(f)
-                f.seek(4,1)
-                boneName = r.string(f,boneNameSize)
-                f.seek(4,1)
-                parentIndex = r.int16(f)
-                # print(parentIndex)
-                Bones.append(boneName)
-                ParentIndices.append(parentIndex)
+        sktName,Bones,ParentIndices = GetSkeletonBonesAndParents(SkeletonPath)
 
         armatureName = str(ArchiveManager.get_file_hash(skeletonFile))
         armature = bpy.data.armatures.new(armatureName)
@@ -1856,14 +1872,17 @@ def CreateSkeleton():
             bone.tail = mathutils.Vector([0,0.0,0.1])
         # TODO Not every bone has a matrix, if it's not used by the asset that populated the BoneMatrices the bone will be at world origin
         print("Create Skeleton: Placing Bones...")
-        for b in BoneMatrices:
-            bone = armature.edit_bones[b]
+        for b in BoneMatrices.keys():
+            targetBoneName = Bones[b]
+            bone = armature.edit_bones[targetBoneName]
             # bone.tail = mathutils.Vector([0,0,1])
 
-            bone.transform(BoneMatrices[b])
+            # bone.transform(BoneMatrices[b])
+            bone.matrix = BoneMatrices[b]
             # bone.transform(mathutils.Matrix.Rotation(math.radians(-90),4,'X'))
 
         #TODO I can't figure out a better way to switch Z and Y axis
+
         print("Create Skeleton: Swaping Bones Z and Y axis")
         for b in armature.edit_bones:
             zaxis = b.z_axis
@@ -1872,21 +1891,84 @@ def CreateSkeleton():
             if len(b.children) == 1:
                 if b.children[0].head != mathutils.Vector([0.0,0.0,0.0]):
                     b.tail = b.children[0].head # connect bone to child
-                else:
-                    b.tail = b.head + (-zaxis * length) #unless the child is at 0,0,0
-            else:
-                # if no children or multiple children, make the bone point in the -z axis
-                # this was necessary for static meshes attached to the skeleton
-                b.tail = b.head + (-zaxis * length)
+            #     else:
+            #         b.tail = b.head + (-zaxis * length) #unless the child is at 0,0,0
+            # else:
+            #     # if no children or multiple children, make the bone point in the -z axis
+            #     # this was necessary for static meshes attached to the skeleton
+            #     b.tail = b.head + (-zaxis * length)
 
         bpy.ops.object.mode_set(mode='OBJECT')
         return obj
 def UpdateSkeleton(armatureObject):
+    return #TODO Error about bone key not found in edit_bones
     obj = armatureObject
     armature = obj.data
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.mode_set(mode="EDIT")
-    #TODO update skeleton bone matrices when mesh is imported on an existing armature
+    HZDEditor = bpy.context.scene.HZDEditor
+    SkeletonPath = HZDEditor.SkeletonAbsPath  # path to real file on disk
+    skeletonFile = GetSkeletonReference()  # path to game asset
+    if skeletonFile:
+        print("Update Skeleton: Skeleton reference found -> ", skeletonFile)
+    else:
+        print("Update Skeleton: Could not find skeleton reference")
+        return  # failed to find skeleton path string for hash reference. The skeleton data wouldn't have a proper name.
+    if SkeletonPath == "" and skeletonFile != "":
+        print("Create Skeleton: Skeleton Path not specified, extracting from reference...")
+        SkeletonPath = FindExtractSkeletonFile(skeletonFile)
+        print("Create Skeleton: Skeleton Path = ", SkeletonPath)
+    if SkeletonPath != "" and skeletonFile != "":
+        print("Create Skeleton: Paths are valid, starting to create skeleton...")
+        sktName, Bones, ParentIndices = GetSkeletonBonesAndParents(SkeletonPath)
+
+    print("Update Skeleton: Placing Bones...")
+
+    for b in BoneMatrices.keys():
+        print(b)
+        print(BoneMatrices[b])
+        targetBoneName = Bones[b]
+        print(targetBoneName)
+        bone = armature.edit_bones[targetBoneName]
+        print(bone.name)
+        print(bone.matrix)
+        defaultMatrix = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0),(0.0, 0.0, -1.0, 0.0),(0.0, 1.0, 0.0, 0.0),(0.0, 0.0, 0.0, 1.0)))
+        defaultMatrix = mathutils.Matrix(((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
+        bone.matrix = BoneMatrices[b]
+        if Compare4x4Matrices(bone.matrix,defaultMatrix ):
+            pass
+        # bone.transform(BoneMatrices[b])
+        # zaxis = bone.z_axis
+        # length = 0.1  # default bone length
+        #
+        if len(bone.children) == 1:
+            if bone.children[0].head != mathutils.Vector([0.0, 0.0, 0.0]):
+                bone.tail = bone.children[0].head  # connect bone to child
+        #     else:
+        #         bone.tail = bone.head + (-zaxis * length)  # unless the child is at 0,0,0
+        # else:
+        #     # if no children or multiple children, make the bone point in the -z axis
+        #     # this was necessary for static meshes attached to the skeleton
+        #     bone.tail = bone.head + (-zaxis * length)
+
+    # TODO I can't figure out a better way to switch Z and Y axis
+
+    # print("Update Skeleton: Swaping Bones Z and Y axis")
+    # for b in armature.edit_bones:
+    #     zaxis = b.z_axis
+    #     length = 0.1  # default bone length
+    #
+    #     if len(b.children) == 1:
+    #         if b.children[0].head != mathutils.Vector([0.0, 0.0, 0.0]):
+    #             b.tail = b.children[0].head  # connect bone to child
+    #         else:
+    #             b.tail = b.head + (-zaxis * length)  # unless the child is at 0,0,0
+    #     else:
+    #         # if no children or multiple children, make the bone point in the -z axis
+    #         # this was necessary for static meshes attached to the skeleton
+    #         b.tail = b.head + (-zaxis * length)
+
+    bpy.ops.object.mode_set(mode='OBJECT')
 
 def WritePosition(f,vertex,elementInfo):
     p = BytePacker
@@ -2008,12 +2090,21 @@ def GetColor(editedMesh):
     Colors = [(0,0,0,0)] * len(editedMesh.vertices)
     bm = bmesh.new()
     bm.from_mesh(editedMesh)
-    bm.faces.ensure_lookup_table()
-    # Get UVs and Color
-    for bface in bm.faces:
-        for loop in bface.loops:
-            uv = loop[bm.loops.layers.color[0]].uv
-            Colors[loop.vert.index] = uv
+
+    bm.verts.ensure_lookup_table()
+    # Get Color
+    color_layer = bm.verts.layers.float_color.get("Color")
+    for v in bm.verts:
+        vcolor = v[color_layer]
+        Colors[v.index] = vcolor
+
+    # OLD Bytes Color system
+    # bm.faces.ensure_lookup_table()
+    # # Get Color
+    # for bface in bm.faces:
+    #     for loop in bface.loops:
+    #         vcolor = loop[bm.loops.layers.color[0]]
+    #         Colors[loop.vert.index] = vcolor
     return Colors
 def WriteColor(f,vertexColors,index,elementInfo):
     p = BytePacker
@@ -2199,37 +2290,37 @@ def ExportMesh(isLodMesh, resIndex, meshIndex, primIndex):
                 oldOffset = r.uint64(w)
                 w.seek(pos)
                 w.write(p.uint64(oldOffset + diff))
-        def mdDiff(p_mesh, p_prim):
-            # Vertex
-            if p_prim.vertexBlock:
+        def mdDiff(p_mesh, p_prim,p_primIndex):
+            if p_prim.vertexBlock.inStream:
+                # Vertex
                 AddDiff(p_prim.vertexBlock.vertexStream.streamInfo.offsetPos)
+                # Normals
+                if p_prim.vertexBlock.normalsStream:
+                    AddDiff(p_prim.vertexBlock.normalsStream.streamInfo.offsetPos)
+                # UV
+                if p_prim.vertexBlock.uvStream:
+                    AddDiff(p_prim.vertexBlock.uvStream.streamInfo.offsetPos)
             # Edge
-            if p_mesh.skinInfo.meshInfos[primIndex].edgeRef.type.name == "Internal":
+            if p_mesh.skinInfo.meshInfos[p_primIndex].edgeRef.type.name == "External":
                 AddDiff(p_mesh.skinInfo.edgeData.dataOffset)
-            # Normals
-            if p_prim.vertexBlock.normalsStream:
-                AddDiff(p_prim.vertexBlock.normalsStream.streamInfo.offsetPos)
-            # UV
-            if p_prim.vertexBlock.uvStream:
-                AddDiff(p_prim.vertexBlock.uvStream.streamInfo.offsetPos)
             # Faces
-            if p_prim.faceBlock:
+            if p_prim.faceBlock.inStream:
                 AddDiff(p_prim.faceBlock.indexStream.offsetPos)
 
         #Group are after Objects, so no need to add to objects.
         if isLodMesh:
             # Remaining primitives of current Lod
-            for prim in asset.LodMeshResources[resIndex].meshList[meshIndex].primitives[primIndex + 1:]:
-                mdDiff(mesh,prim)
+            for pi,prim in enumerate(asset.LodMeshResources[resIndex].meshList[meshIndex].primitives[primIndex + 1:]):
+                mdDiff(mesh,prim,pi)
             # The following LODs
             for l in asset.LodMeshResources[resIndex].meshList[meshIndex + 1:]:
-                for prim in l.primitives:
-                    mdDiff(l,prim)
+                for pi,prim in enumerate(l.primitives):
+                    mdDiff(l,prim,pi)
             #just in case there are other groups
             for g in asset.LodMeshResources[resIndex + 1:]:
                 for l in g.meshList:
-                    for prim in l.primitives:
-                        mdDiff(l,prim)
+                    for pi,prim in enumerate(l.primitives):
+                        mdDiff(l,prim,pi)
 
         else:
             # Remaining mesh blocks of current Lod
@@ -2293,6 +2384,8 @@ class Asset:
         self.MultiMeshResources = []
         self.RegularSkinnedMeshResources = []
         self.StaticMeshResources = []
+
+        self.skeletonPath = "" #path to skeleton asset (start with models/ end with .core).
 
 
 BlockIDs = {"RegularSkinnedMeshResource" : 10982056603708398958,
@@ -2773,6 +2866,7 @@ class StreamData:
             return "Offset: %d - StorageType %s - Count %d - ElementType %s"%(self.offset,self.storageType.name,self.count,self.elementType.name)
 
     def __init__(self,f,inStream,elementCount,streamStartOffset):
+        self.streamInfo = None
         r = ByteReader
         f.seek(4,1) #skip Flags
         self.stride = r.int32(f)
@@ -2804,6 +2898,7 @@ class Reference:
         UUID = 4
     def __init__(self,f):
         r = ByteReader
+        self.externalFile = None
         typeRead = r.uint8(f)
         typeValues = [item.value for item in Reference.ReferenceType]
         if typeRead not in typeValues:
@@ -3054,6 +3149,8 @@ class RegularSkinnedMeshResource(DataBlock):
         self.meshName = r.hashtext(f)
         self.meshBase = MeshResourceBase(f)
         self.skeletonRef = Reference(f)
+        if self.skeletonRef.externalFile is not None:
+            asset.skeletonPath = self.skeletonRef.externalFile
         self.SkeletonHelpersRef = Reference(f)
         f.seek(8,1) #skip DrawFlags
         self.boneBindingsRef = Reference(f)
