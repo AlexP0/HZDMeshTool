@@ -405,7 +405,7 @@ class ArchiveManager:
             else:
                 ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core"
         return ExtractedFilePath
-    def ExtractFile(self,file,filePath, isStream = False):
+    def ExtractFile(self,file,filePath, isStream = False, overwrite = False):
         class Oodle:
             HZDEditor = bpy.context.scene.HZDEditor
 
@@ -467,17 +467,17 @@ class ArchiveManager:
             else:
                 ExtractedFilePath = HZDEditor.WorkAbsPath + os.path.normpath(filePath) + ".core"
 
-        if os.path.exists(ExtractedFilePath):
+        if os.path.exists(ExtractedFilePath) and not overwrite:
             say(filePath + "------Asset already extracted")
             return ExtractedFilePath
         else:
             say(filePath + "------Extracting Asset")
             StartChunkIndex = self.FindChunkContainingOffset(file.offset)
-            EndChunkIndex = self.FindChunkContainingOffset(file.offset + file.size)
+            EndChunkIndex = self.FindChunkContainingOffset(file.offset + file.size - 1)
 
             directory = pathlib.Path(ExtractedFilePath).parent
             pathlib.Path(directory).mkdir(parents= True,exist_ok=True)
-            with open(HZDEditor.GamePath + os.path.join("Packed_DX12", self.DesiredArchive), 'rb') as f, open(ExtractedFilePath, 'wb') as w:
+            with self.DesiredArchive.open(mode='rb') as f, open(ExtractedFilePath, 'wb') as w:
                 for chunk in self.Chunks[StartChunkIndex:EndChunkIndex + 1]:
                     # chunk.print()
                     f.seek(chunk.compressed_offset)
@@ -496,9 +496,12 @@ class ArchiveManager:
         # DesiredHash = b'\x0A\x4C\xD6\x5C\xF6\x5A\xFF\x2F' #Prefetch
         DesiredHash = self.get_file_hash(filePath)
         say(str(DesiredHash))
-        for binArchive in ['Patch.bin','Remainder.bin','DLC1.bin','Initial.bin']:
-            say("Searching for "+filePath+" in "+binArchive)
-            with open(HZDEditor.GamePath + os.path.join("Packed_DX12", binArchive), 'rb') as f:
+        archivesPath = Path(os.path.join(HZDEditor.GamePath, "Packed_DX12"))
+        archiveFiles = sorted(archivesPath.glob("*Patch?*.bin"), reverse=True)
+        archiveFiles += [archivesPath.joinpath(f) for f in ['Patch.bin','Remainder.bin','DLC1.bin','Initial.bin']]
+        for binArchive in archiveFiles:
+            say("Searching for "+filePath+" in "+str(binArchive))
+            with binArchive.open(mode='rb') as f:
                 H = self.BinHeader()
                 self.Chunks.clear()
                 H.parse(f)
@@ -516,12 +519,12 @@ class ArchiveManager:
                         file.print()
                         foundFile = True
                         DesiredFile = file
+                        self.DesiredArchive = binArchive
                 if foundFile:
                     for chunk in range(H.chunkcount):
                         chunk = self.ChunkEntry()
                         chunk.parse(f)
                         self.Chunks.append(chunk)
-                        self.DesiredArchive = binArchive
                     break
                 else:
                     pass
@@ -532,13 +535,13 @@ class ArchiveManager:
     def isFileInWorkspace(self,filePath,isStream):
         return os.path.exists(self.GetExtractedFilePath(filePath,isStream))
 
-    def FindAndExtract(self,filePath,isStream = False):
-        if self.isFileInWorkspace(filePath,isStream):
+    def FindAndExtract(self,filePath,isStream = False,overwrite = False):
+        if self.isFileInWorkspace(filePath,isStream) and not overwrite:
             ExtractedFilePath = self.GetExtractedFilePath(filePath,isStream)
             print("File Already Extracted: ",ExtractedFilePath)
         else:
             assetFile = self.FindFile(filePath)
-            ExtractedFilePath = self.ExtractFile(assetFile,filePath,isStream)
+            ExtractedFilePath = self.ExtractFile(assetFile,filePath,isStream,overwrite)
         return ExtractedFilePath
 def ClearProperties(self,context):
     HZDEditor = bpy.context.scene.HZDEditor
@@ -925,6 +928,7 @@ class HZDSettings(bpy.types.PropertyGroup):
     ExtractTextures : bpy.props.BoolProperty(name="Extract Textures",default=False,description="Toggle the extraction of textures. When importing a mesh, texture will be detected and extracted to the Workspace directory.")
     OverwriteTextures : bpy.props.BoolProperty(name="Overwrite Textures",default=False,description="Overwrite existing textures, when textures will be extracted to the Workspace directory.")
     KeepDDS : bpy.props.BoolProperty(name="Keep DDS",default=False,description="Keep DDS file, when DDS will be converted to PNG.")
+    OverwriteAssets : bpy.props.BoolProperty(name="Overwrite Assets",default=False,description="Overwrite existing assets core files, when assets will be extracted to the Workspace directory.")
 
 def ParsePosition(f,storageType):
     r = ByteReader
@@ -1266,7 +1270,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
             #there's no reference to the core file of the asset itself, so we can't know what its path is.
             if modelHelperPath != "":
                 AM = ArchiveManager()
-                modelHelperPath = AM.FindAndExtract(modelHelperPath, False)
+                modelHelperPath = AM.FindAndExtract(modelHelperPath, False, HZDEditor.OverwriteAssets)
                 HZDEditor.ModelHelpersPath = modelHelperPath
         else:
             modelHelperPath = bpy.path.abspath(HZDEditor.ModelHelpersPath)
@@ -1289,7 +1293,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
                 HZDBones = []
                 # Get every bone name because blender's bone indices don't match HZD
                 AM = ArchiveManager()
-                HZDEditor.SkeletonAbsPath = AM.FindAndExtract(skeletonAssetPath, False)
+                HZDEditor.SkeletonAbsPath = AM.FindAndExtract(skeletonAssetPath, False, HZDEditor.OverwriteAssets)
 
                 with open(HZDEditor.SkeletonAbsPath, 'rb') as f:
                     f.seek(28)
@@ -1334,12 +1338,12 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
 def ExtractAsset(assetPath):
 
     AM = ArchiveManager()
-    #Extract Asset
-
-    filePath = AM.FindAndExtract(assetPath,False)
-    fileStreamPath = AM.FindAndExtract(assetPath+".stream", False)
-
     HZDEditor = bpy.context.scene.HZDEditor
+
+    #Extract Asset
+    filePath = AM.FindAndExtract(assetPath,False,HZDEditor.OverwriteAssets)
+    fileStreamPath = AM.FindAndExtract(assetPath+".stream", False, HZDEditor.OverwriteAssets)
+
     HZDEditor.HZDPath = filePath
 
     ReadCoreFile()
@@ -1348,7 +1352,7 @@ def ExtractAsset(assetPath):
         skeletonFile = asset.LodMeshResources[0].meshList[0].skeletonRef.externalFile #TODO should do more checks on here (not sure if static or skinned, not sure if external
         say(skeletonFile)
 
-        fileSkeletonPath = AM.FindAndExtract(skeletonFile + ".core", False)
+        fileSkeletonPath = AM.FindAndExtract(skeletonFile + ".core", False, HZDEditor.OverwriteAssets)
         HZDEditor.SkeletonPath = fileSkeletonPath
     return
 
@@ -1438,7 +1442,7 @@ def ExtractTexture(outWorkspace,texPath):
             else:
                 streamData = bytes()
                 if t.streamSize32 > 0:
-                    streamFilePath = AM.FindAndExtract(texPath+".core.stream",True)
+                    streamFilePath = AM.FindAndExtract(texPath+".core.stream",True,HZDEditor.OverwriteTextures)
                     with open(streamFilePath,'rb') as s:
                         s.seek(t.streamOffset)
                         streamData = s.read(t.streamSize64)
@@ -1466,9 +1470,10 @@ def ExtractTexture(outWorkspace,texPath):
 
     textureFiles = []
     AM = ArchiveManager()
+    HZDEditor = bpy.context.scene.HZDEditor
 
-    #Extract Core
-    filePath = AM.FindAndExtract(texPath+".core",False)
+    #Extract Texture Core
+    filePath = AM.FindAndExtract(texPath+".core",False,HZDEditor.OverwriteTextures)
     ParseTexture(filePath)
 
     return textureFiles, texAs
@@ -1813,7 +1818,7 @@ def CreateSkeleton():
     if SkeletonPath == "" and skeletonFile != "":
         print("Create Skeleton: Skeleton Path not specified, extracting from reference...")
         AM = ArchiveManager()
-        fileSkeletonPath = AM.FindAndExtract(skeletonFile, False)
+        fileSkeletonPath = AM.FindAndExtract(skeletonFile, False, HZDEditor.OverwriteAssets)
         HZDEditor.SkeletonPath = fileSkeletonPath
         SkeletonPath = HZDEditor.SkeletonAbsPath
         print("Create Skeleton: Skeleton Path = ",SkeletonPath)
@@ -3417,6 +3422,8 @@ class HZDPanel(bpy.types.Panel):
         row = layout.row()
         row.prop(HZDEditor, "AssetPath")
         row.operator("object.extract_asset",icon="EXPORT")
+        row = layout.row()
+        row.prop(HZDEditor,"OverwriteAssets")
 
         row = layout.row()
 
