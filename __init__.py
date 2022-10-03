@@ -2329,22 +2329,22 @@ def ExportMesh(isLodMesh, resIndex, meshIndex, primIndex):
 
         else:
             # Remaining mesh blocks of current Lod
-            for prim in asset.MultiMeshResources[resIndex].meshList[meshIndex].primitives[primIndex + 1:]:
-                mdDiff(mesh,prim)
+            for pi,prim in enumerate(asset.MultiMeshResources[resIndex].meshList[meshIndex].primitives[primIndex + 1:]):
+                mdDiff(mesh,prim,pi)
             # The following LODs
             for l in asset.MultiMeshResources[resIndex].meshList[meshIndex + 1:]:
-                for prim in l.primitives:
-                    mdDiff(l,prim)
+                for pi,prim in enumerate(l.primitives):
+                    mdDiff(l,prim,pi)
             # the other objects
             for o in asset.MultiMeshResources[resIndex + 1:]:
                 for l in o.meshList:
-                    for prim in l.primitives:
-                        mdDiff(l,prim)
+                    for pi,prim in enumerate(l.primitives):
+                        mdDiff(l,prim,pi)
             # do every md in every lod of every LODGroup
             for g in asset.LodMeshResources:
                 for l in g.meshList:
-                    for prim in l.primitives:
-                        mdDiff(l,prim)
+                    for pi,prim in enumerate(l.primitives):
+                        mdDiff(l,prim,pi)
     # Delete Source Core
     # if os.path.exists(core + "MOD"):
     #     os.remove(core+"MOD")
