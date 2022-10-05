@@ -2091,18 +2091,15 @@ def WriteUVs(f,UVs,index,elementInfo):
         uv += p.packVertexStorageType(u,ei.storageType)
     f.write(uv)
 
-def WriteColor(f,index,elementInfo,editedMesh):
+def WriteColor(f,index,elementInfo,p_bmesh):
     p = BytePacker
     ei: StreamData.VertexElementDesc = elementInfo
     vc = b''
 
-    bm = bmesh.new()
-    bm.from_mesh(editedMesh)
-    bm.verts.ensure_lookup_table()
+
     # Get Color
-    color_layer = bm.verts.layers.float_color["Color"]
-    vertexColor = bm.verts[index][color_layer]
-    bm.free()
+    color_layer = p_bmesh.verts.layers.float_color["Color"]
+    vertexColor = p_bmesh.verts[index][color_layer]
     for c in vertexColor:
         vc += p.packVertexStorageType(c,ei.storageType)
     f.write(vc)
@@ -2215,15 +2212,18 @@ def ExportMesh(isLodMesh, resIndex, meshIndex, primIndex):
                 allUVs.append(GetUVs(editedMesh,int(ei.elementType.name[-1])))
             # if ei.elementType == et.Color:
             #     vertexColor = GetColor(editedMesh)
-
+        bm = bmesh.new()
+        bm.from_mesh(editedMesh)
+        bm.verts.ensure_lookup_table()
         for v in editedMesh.vertices:
             for ei in us.elementInfo:
                 if ei.elementType in (et.UV0,et.UV1,et.UV2,et.UV3,et.UV4,et.UV5,et.UV6):
                     WriteUVs(w,allUVs[int(ei.elementType.name[-1])],v.index,ei)
                 elif ei.elementType == et.Color:
-                    WriteColor(w,v.index,ei,editedMesh)
+                    WriteColor(w,v.index,ei,bm)
                 else:
                     print("     ElementType not supported in Normals Stream: ", ei.elementType)
+        bm.free()
         FillChunk(w)
         newUVStreamSize = w.tell() - newUVStreamOffset
 
