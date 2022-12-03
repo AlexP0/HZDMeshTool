@@ -2,7 +2,7 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 4, 0),
+    "version": (1, 4, 1),
     "blender": (3, 2, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -3033,7 +3033,7 @@ class RenderTechniqueSet:
         f.seek(8,1) #skip TechniquesMask variables
 class ShaderResource(DataBlock):
     def __init__(self,f,expectedGuid):
-        super().__init__(f,BlockIDs["ShaderResource"],expectedGuid)
+        super().__init__(f,0,expectedGuid)
         #skip everything
         self.EndBlock(f)
 class RenderEffectResource(DataBlock):
