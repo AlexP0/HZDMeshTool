@@ -1380,26 +1380,36 @@ def ExtractTexture(outWorkspace,texPath):
     def BuildDDSHeader(tex:Texture) -> bytes:
         r = BytePacker
         data = bytes()
-        flags = b'\x07\x10\x00\x00' # DDSD_CAPS|DDSD_HEIGHT|DDSD_WIDTH|DDSD_PIXELFORMAT
+        flags = b'\x07\x10\x02\x00' # DDSD_CAPS|DDSD_HEIGHT|DDSD_WIDTH|DDSD_PIXELFORMAT|DDSD_MIPMAPCOUNT
         data += flags
 
         data += r.uint32(tex.height * tex.arraySize if tex.type == Texture.TextureType['_2DARRAY'] else tex.height)
         data += r.uint32(tex.width)
-        data += r.uint32(tex.thumbnailLength + tex.streamSize32) # pitch
+        data += r.uint32(0) # (tex.embeddedSize + tex.streamSize) # pitch
         data += r.uint32(0) # depth
-        data += r.uint32(tex.mipCount + 1 if hasattr(tex, "mipCount") else 1) # mipmap count
+        data += r.uint32(tex.mipCount if hasattr(tex, "mipCount") else 1) # mipmap count
         data += (b'\x00' * 4) * 11 # reserved
 
         if tex.format in ddpf_map:
             pf = ddpf_map[tex.format]
+            fourcc = r.uint32(0)
         else:
             pf = (DDPF.FOURCC, 0, 0, 0, 0, 0)
+            match tex.format:
+                case Texture.PixelFormat.BC1:
+                    fourcc = b'DXT1'
+                case Texture.PixelFormat.BC2:
+                    fourcc = b'DXT3'
+                case Texture.PixelFormat.BC3:
+                    fourcc = b'DXT5'
+                case _:
+                    fourcc = b'DX10'
         (flags, bits, rmask, gmask, bmask, amask) = pf
 
         ddsPF = bytes() # DDS pixel format
         ddsPF += r.uint32(32) # size
         ddsPF += r.uint32(flags)  # flags
-        ddsPF += b'DX10' if flags == DDPF.FOURCC else r.uint32(0) # fourcc
+        ddsPF += fourcc
         ddsPF += r.uint32(bits)  # bit count
         ddsPF += r.uint32(rmask)  # red mask
         ddsPF += r.uint32(gmask)  # green mask
@@ -1407,7 +1417,7 @@ def ExtractTexture(outWorkspace,texPath):
         ddsPF += r.uint32(amask)  # alpha mask
 
         data += ddsPF
-        caps = b'\x00\x10\x00\x00' # DDSCAPS_TEXTURE
+        caps = b'\x08\x10\x40\x00' # DDSCAPS_COMPLEX | DDSCAPS_TEXTURE | DDSCAPS_MIPMAP
         data += caps
         data += r.uint32(0) # caps2
         data += r.uint32(0) # caps3
@@ -1416,7 +1426,7 @@ def ExtractTexture(outWorkspace,texPath):
 
         data = b'DDS ' + r.uint32(len(data)+4) + data # fourcc + size
 
-        if flags == DDPF.FOURCC:
+        if fourcc == b'DX10':
             dx10 = b''
             assert tex.format in format_map, f"Unmapped image format: {tex.format.name}"
             dx10 += r.uint32(format_map[tex.format].value) # DXGI format
@@ -1449,17 +1459,17 @@ def ExtractTexture(outWorkspace,texPath):
                 textureFiles.append(outImage)
             else:
                 streamData = bytes()
-                if t.streamSize32 > 0:
+                if t.streamSize > 0:
                     streamFilePath = AM.FindAndExtract(texPath+".core.stream",True,HZDEditor.OverwriteTextures)
                     with open(streamFilePath,'rb') as s:
                         s.seek(t.streamOffset)
-                        streamData = s.read(t.streamSize64)
+                        streamData = s.read(t.streamLength)
                         s.close()
 
                 with ddsImage.open(mode='wb') as w:
                     w.write(BuildDDSHeader(t))
                     w.write(streamData)
-                    w.write(t.thumbnail)
+                    w.write(t.embeddedData)
                     w.close()
                     if os.path.exists(HZDEditor.NVTTPath):
                         if any([platform.startswith(os_name) for os_name in ['linux', 'darwin', 'freebsd']]):
@@ -2582,22 +2592,23 @@ class Texture(DataBlock):
         height = r.uint16(f)
         self.height = height & 0x3FFF
         self.arraySize = r.uint16(f)
-        f.seek(1,1)
+        self.mipCount = r.uint8(f)
         self.format : Texture.PixelFormat = self.PixelFormat(r.uint8(f))
         f.seek(2,1)
-        f.seek(20,1)
-        self.imageChunkSize= r.uint32(f)
-        self.thumbnailLength = r.uint32(f)
-        self.streamSize32 = r.uint32(f)
-        if self.streamSize32 > 0:
-            self.mipCount = r.uint32(f)
+        f.seek(4,1) # magic
+        f.seek(16,1) # hash
+        self.imageChunkSize = r.uint32(f)
+        self.embeddedSize = r.uint32(f)
+        self.streamSize = r.uint32(f)
+        if self.streamSize > 0:
+            self.streamMipCount = r.uint32(f)
             self.streamPath = r.path(f) [6:] #remove "cache:"
             self.streamOffset = r.uint64(f)
-            self.streamSize64 = r.uint64(f)
+            self.streamLength = r.uint64(f)
         else:
-            padding = self.imageChunkSize - (self.thumbnailLength + 8)
+            padding = self.imageChunkSize - (self.embeddedSize + 8)
             f.seek(padding,1)
-        self.thumbnail = f.read(self.thumbnailLength)
+        self.embeddedData = f.read(self.embeddedSize)
 
         self.EndBlock(f)
 
