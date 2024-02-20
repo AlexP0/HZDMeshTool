@@ -2,8 +2,8 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 4, 1),
-    "blender": (3, 2, 0),
+    "version": (1, 4, 2),
+    "blender": (3, 6, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
     }
@@ -228,10 +228,15 @@ def node_hzdmt_cache(reload=False):
     if node_cache:
         return node_cache
 
-    for filepath in Path(dirpath).rglob('*.blend'):
-        with bpy.data.libraries.load(str(filepath)) as (data_from, data_to):
+    if bpy.app.version < (4, 0, 0):
+        hzd_node_groups = "HZDNodeGroups-3.x.blend"
+    else:
+        hzd_node_groups = "HZDNodeGroups.blend"
+
+    for filepath in { hzd_node_groups, "node-spaghetti-material-node-groups/normalMap_nodeGroups.blend" }:
+        with bpy.data.libraries.load(dirpath + '/' + filepath) as (data_from, data_to):
             for group_name in data_from.node_groups:
-                node_cache.append((group_name, str(filepath)))
+                node_cache.append((group_name, dirpath + '/' + filepath))
 
     node_cache = sorted(node_cache)
 
@@ -1590,10 +1595,7 @@ def CreateMaterial(obj,matblock,meshName):
         for i,t in enumerate(matblock.uniqueTextures):
             images,texAsset = ExtractTexture(HZDEditor.WorkAbsPath, t)
             frameName = t.split('/')[0]
-            if frameName == 'models':
-                tiling = False
-            else:
-                tiling = True
+            tiling = True
 
             if texAsset.texSet is not None:
 
@@ -1602,6 +1604,7 @@ def CreateMaterial(obj,matblock,meshName):
                 groupHash = hashlib.sha224(t.encode("utf8")).hexdigest()[:10]
                 if len(images) > 2 or groupName == baseTexName:
                     groupOutputs = BaseTextureOutputs
+                    tiling = False
                 else:
                     groupOutputs = DetailTextureOutputs
                 print(frameName, groupName, groupHash)
@@ -1613,26 +1616,36 @@ def CreateMaterial(obj,matblock,meshName):
                     texSetGroup = bpy.data.node_groups.new(groupName,"ShaderNodeTree")
 
                     # Outputs
-                    texSetGroup_output = texSetGroup.nodes.new("NodeGroupOutput")
+                    texSetGroupOut = texSetGroup.nodes.new("NodeGroupOutput")
+                    texSetGroupSocket = {}
                     for out in groupOutputs:
-                        texSetGroup.outputs.new("NodeSocket" + groupOutputs[out][0], out)
-                        texSetGroup.outputs[out].default_value = groupOutputs[out][1]
-                        texSetGroup_output.inputs[out].hide = True
-                    texSetGroup_output.location = offset_x + 10.0, offset_y + 30.0
+                        if bpy.app.version < (4, 0, 0):
+                            texSetGroup.outputs.new("NodeSocket" + groupOutputs[out][0], out)
+                            texSetGroup.outputs[out].default_value = groupOutputs[out][1]
+                        else:
+                            texSetGroupSocket[out] = texSetGroup.interface.new_socket(name=out, in_out='OUTPUT', socket_type="NodeSocket" + groupOutputs[out][0])
+                            texSetGroupSocket[out].default_value = groupOutputs[out][1]
+                        texSetGroupOut.inputs[out].hide = True
+                    texSetGroupOut.location = offset_x + 10.0, offset_y + 30.0
 
                     # Inputs
                     if tiling:
                         # Create 'Texture Coordinate' and 'Mapping' to scale textures with 'Tiling' input value
-                        texSetGroup.inputs.new("NodeSocketFloat", "Tiling")
-                        texSetGroup.inputs["Tiling"].default_value = 20.0
-                        texSetGroup.inputs["Tiling"].min_value = 0.0
-                        texSetGroup_input = texSetGroup.nodes.new("NodeGroupInput")
-                        texSetGroup_input.location = offset_x - 900.0, offset_y - 250.0
+                        if bpy.app.version < (4, 0, 0):
+                            texSetGroup.inputs.new("NodeSocketFloat", "Tiling")
+                            texSetGroup.inputs["Tiling"].default_value = 20.0
+                            texSetGroup.inputs["Tiling"].min_value = 0.0
+                        else:
+                            texSetGroupSocket["Tiling"] = texSetGroup.interface.new_socket(name="Tiling", in_out='INPUT', socket_type="NodeSocketFloat")
+                            texSetGroupSocket["Tiling"].default_value = 20.0
+                            texSetGroupSocket["Tiling"].min_value = 0.0
+                        texSetGroupIn = texSetGroup.nodes.new("NodeGroupInput")
+                        texSetGroupIn.location = offset_x - 900.0, offset_y - 250.0
                         coordNode = texSetGroup.nodes.new('ShaderNodeTexCoord')
                         coordNode.location = offset_x - 900.0, offset_y
                         mappingNode = texSetGroup.nodes.new('ShaderNodeMapping')
                         mappingNode.location = offset_x - 700.0, offset_y
-                        texSetGroup.links.new(texSetGroup_input.outputs['Tiling'], mappingNode.inputs['Scale'])
+                        texSetGroup.links.new(texSetGroupIn.outputs['Tiling'], mappingNode.inputs['Scale'])
                         texSetGroup.links.new(coordNode.outputs['UV'], mappingNode.inputs['Vector'])
 
                     for ii, setT in enumerate(texAsset.texSet.textures):
@@ -1661,9 +1674,9 @@ def CreateMaterial(obj,matblock,meshName):
                             normalConverter.hide = True
                             normalConverter.inputs['Strength'].hide = True
                             texSetGroup.links.new(texNode.outputs['Color'], normalConverter.inputs['Color'])
-                            texSetGroup.links.new(normalConverter.outputs['Normal'], texSetGroup_output.inputs['Normal'])
-                            texSetGroup.links.new(normalConverter.outputs['Normal Color'], texSetGroup_output.inputs['Normal Color'])
-                            if not setT.channelTypes[2].usageType == "Normal" and setT.channelTypes[2].usageType != "Invalid":
+                            texSetGroup.links.new(normalConverter.outputs['Normal'], texSetGroupOut.inputs['Normal'])
+                            texSetGroup.links.new(normalConverter.outputs['Normal Color'], texSetGroupOut.inputs['Normal Color'])
+                            if setT.channelTypes[2].usageType != "Normal" and setT.channelTypes[2].usageType != "Invalid":
                                 # Blue channel
                                 sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
                                 if tiling:
@@ -1675,10 +1688,13 @@ def CreateMaterial(obj,matblock,meshName):
                                 sepRGBNode.hide = True
                                 sepRGBNode.outputs['R'].hide = True
                                 sepRGBNode.outputs['G'].hide = True
-                                if not texSetGroup.outputs.get(setT.channelTypes[2].usageType):
-                                    texSetGroup.outputs.new('NodeSocketFloat', setT.channelTypes[2].usageType)
+                                if not texSetGroupOut.inputs.get(setT.channelTypes[2].usageType):
+                                    if bpy.app.version < (4, 0, 0):
+                                        texSetGroup.outputs.new('NodeSocketFloat', setT.channelTypes[2].usageType)
+                                    else:
+                                        texSetGroup.interface.new_socket(name=setT.channelTypes[2].usageType, in_out='OUTPUT', socket_type='NodeSocketFloat')
                                 texSetGroup.links.new(texNode.outputs['Color'], sepRGBNode.inputs['Image'])
-                                texSetGroup.links.new(sepRGBNode.outputs['B'], texSetGroup_output.inputs[setT.channelTypes[2].usageType])
+                                texSetGroup.links.new(sepRGBNode.outputs['B'], texSetGroupOut.inputs[setT.channelTypes[2].usageType])
 
                         elif all(cha.usageType == setT.channelTypes[0].usageType for cha in setT.channelTypes[0:3]):
                             # no need to break the color
@@ -1692,14 +1708,17 @@ def CreateMaterial(obj,matblock,meshName):
                                 separateMisc.hide = True
                                 texSetGroup.links.new(texNode.outputs['Color'], separateMisc.inputs['Color'])
                                 for out in separateMisc.outputs:
-                                  texSetGroup.links.new(separateMisc.outputs[out.name], texSetGroup_output.inputs[out.name])
+                                  texSetGroup.links.new(separateMisc.outputs[out.name], texSetGroupOut.inputs[out.name])
                             else:
                                 outputType = UsageType_ValueMap[setT.channelTypes[0].usageType]
                                 if setT.channelTypes[0].usageType == "Mask" and groupOutputs == BaseTextureOutputs:
                                     setT.channelTypes[0].usageType = "CID Mask"
-                                if not texSetGroup.outputs.get(setT.channelTypes[0].usageType):
-                                    texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
-                                texSetGroup.links.new(texNode.outputs['Color'], texSetGroup_output.inputs[setT.channelTypes[0].usageType])
+                                if not texSetGroupOut.inputs.get(setT.channelTypes[0].usageType):
+                                    if bpy.app.version < (4, 0, 0):
+                                        texSetGroup.outputs.new("NodeSocket"+outputType, setT.channelTypes[0].usageType)
+                                    else:
+                                        texSetGroup.interface.new_socket(in_out='OUTPUT', socket_type="NodeSocket"+outputType, name=setT.channelTypes[0].usageType)
+                                texSetGroup.links.new(texNode.outputs['Color'], texSetGroupOut.inputs[setT.channelTypes[0].usageType])
 
                         else:
                             sepRGBNode = texSetGroup.nodes.new("ShaderNodeSeparateRGB")
@@ -1719,9 +1738,12 @@ def CreateMaterial(obj,matblock,meshName):
                                         if cha.usageType == "Mask_Alpha":
                                             cha.usageType = "Detail Strength"
                                     sepRGBNode.label += "RGB"[ic]
-                                    if not texSetGroup.outputs.get(cha.usageType):
-                                        texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
-                                    texSetGroup.links.new(sepRGBNode.outputs[ic], texSetGroup_output.inputs[cha.usageType])
+                                    if not texSetGroupOut.inputs.get(cha.usageType):
+                                        if bpy.app.version < (4, 0, 0):
+                                            texSetGroup.outputs.new("NodeSocketFloat", cha.usageType)
+                                        else:
+                                            texSetGroup.interface.new_socket(in_out='OUTPUT', socket_type="NodeSocketFloat", name=cha.usageType)
+                                    texSetGroup.links.new(sepRGBNode.outputs[ic], texSetGroupOut.inputs[cha.usageType])
 
                         # ALPHA CHANNEL OUTPUT
                         if setT.channelTypes[3].usageType in ("Invalid","Normal","Mask","Reflectance","Misc_01"):
@@ -1731,9 +1753,12 @@ def CreateMaterial(obj,matblock,meshName):
                                 usageType = "Detail Strength"
                             else:
                                 usageType = setT.channelTypes[3].usageType
-                            if not texSetGroup.outputs.get(usageType):
-                                texSetGroup.outputs.new("NodeSocketFloat", usageType)
-                            texSetGroup.links.new(texNode.outputs['Alpha'], texSetGroup_output.inputs[usageType])
+                            if not texSetGroupOut.inputs.get(usageType):
+                                if bpy.app.version < (4, 0, 0):
+                                    texSetGroup.outputs.new("NodeSocketFloat", usageType)
+                                else:
+                                    texSetGroup.interface.new_socket(name=usageType, in_out='OUTPUT', socket_type="NodeSocketFloat")
+                            texSetGroup.links.new(texNode.outputs['Alpha'], texSetGroupOut.inputs[usageType])
 
                         if any(cha.usageType == "Alpha" for cha in setT.channelTypes):
                             mat.blend_method = "BLEND"
@@ -1749,22 +1774,22 @@ def CreateMaterial(obj,matblock,meshName):
                 frame_y[frameName] -= 50.0 - 450.0*(frameName == "models")
 
                 # Link BaseTexture to BSDF
-                texSetGroup_output = shaderGroup.node_tree.nodes['Group Output']
-                for out in texSetGroup_output.inputs:
+                texSetGroupOut = shaderGroup.node_tree.nodes['Group Output']
+                for out in texSetGroupOut.inputs:
                     if out.name and not out.is_linked:
                         shaderGroup.outputs[out.name].hide = True
                 if groupOutputs == BaseTextureOutputs:
                     for out in BaseTextureBSDFLinks:
-                        if texSetGroup_output.inputs[out].is_linked:
+                        if texSetGroupOut.inputs[out].is_linked:
                             mat.node_tree.links.new(shaderGroup.outputs[out], bsdfNode.inputs[out])
-                    if texSetGroup_output.inputs['Detail Strength'].is_linked:
+                    if texSetGroupOut.inputs['Detail Strength'].is_linked:
                         mat.node_tree.links.new(shaderGroup.outputs['Detail Strength'], combineTexNode.inputs['Fac'])
                     mat.node_tree.links.new(shaderGroup.outputs['Roughness'], combineTexNode.inputs['Base Roughness'])
                     mat.node_tree.links.new(shaderGroup.outputs['Normal Color'], combineTexNode.inputs['Base Normal'])
                     mat.node_tree.links.new(shaderGroup.outputs['Color'], combineTexNode.inputs['Base Color'])
-                    if texSetGroup_output.inputs['Array Mask'].is_linked and texDetailMapArray != None:
+                    if texSetGroupOut.inputs['Array Mask'].is_linked and texDetailMapArray != None:
                         mat.node_tree.links.new(shaderGroup.outputs['Array Mask'], texDetailMapArray.inputs['Mask'])
-                    elif texSetGroup_output.inputs['CID Mask'].is_linked or texSetGroup_output.inputs['Skin Mask'].is_linked:
+                    elif texSetGroupOut.inputs['CID Mask'].is_linked or texSetGroupOut.inputs['Skin Mask'].is_linked:
                     # Add 'Combine Detail Textures' Node Group and connect with 'Combine Textures'
                         combineDetailNode = mat.node_tree.nodes.new('ShaderNodeGroup')
                         combineDetailNode.node_tree = bpy.data.node_groups[LoadNodeGroup('Combine Detail Textures')]
@@ -1772,10 +1797,11 @@ def CreateMaterial(obj,matblock,meshName):
                         combineDetailNode.location = -10.0, -250.0
                         mat.node_tree.links.new(combineDetailNode.outputs['Normal Color'], combineTexNode.inputs['Detail Normal'])
                         mat.node_tree.links.new(combineDetailNode.outputs['Detail Color'], combineTexNode.inputs['Detail Color'])
-                    if texSetGroup_output.inputs['CID Mask'].is_linked:
+                    if texSetGroupOut.inputs['CID Mask'].is_linked:
                         mat.node_tree.links.new(shaderGroup.outputs['CID Mask'], combineDetailNode.inputs['CID Mask'])
-                    if texSetGroup_output.inputs['Skin Mask'].is_linked:
-                        mat.node_tree.links.new(shaderGroup.outputs['Color'], bsdfNode.inputs['Subsurface Color'])
+                    if texSetGroupOut.inputs['Skin Mask'].is_linked:
+                        if bpy.app.version < (4, 0, 0):
+                            mat.node_tree.links.new(shaderGroup.outputs['Color'], bsdfNode.inputs['Subsurface Color'])
                         mat.node_tree.links.new(shaderGroup.outputs['Skin Mask'], combineDetailNode.inputs['Skin Mask'])
 
             else:
