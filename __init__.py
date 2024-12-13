@@ -2,7 +2,7 @@ bl_info = {
     "name": "HZD Mesh Tool",
     "author": "AlexPo",
     "location": "Scene Properties > HZD Panel",
-    "version": (1, 4, 2),
+    "version": (1, 4, 3),
     "blender": (3, 6, 0),
     "description": "This addon imports/exports skeletal meshes\n from Horizon Zero Dawn's .core/.stream files",
     "category": "Import-Export"
@@ -1188,7 +1188,7 @@ def ImportMesh(isLodMesh, resIndex, meshIndex, primIndex):
                     bm.to_mesh(mesh)
                     bm.free()
                     mesh.update()
-                    mesh.use_auto_smooth = True
+                    # mesh.use_auto_smooth = True #Blender 4.1 removed this
                     mesh.normals_split_custom_set_from_vertices(normals)
                     bm = bmesh.new()
                     bm.from_mesh(mesh)
@@ -2404,7 +2404,11 @@ def SaveDistances(Index):
             w.seek(17, 1)
             w.write(p.float(HZDEditor["LodDistance" + str(i)]))
 
-
+def GetUniqueReferences(references=[]):
+    unique_refs = {}
+    for ref in references:
+        unique_refs[ref.guid] = ref
+    return unique_refs
 
 class Asset:
     def __init__(self):
@@ -2413,6 +2417,7 @@ class Asset:
         self.MultiMeshResources = []
         self.RegularSkinnedMeshResources = []
         self.StaticMeshResources = []
+        self.resources ={} #Guid : resource
 
         self.skeletonPath = "" #path to skeleton asset (start with models/ end with .core).
 
@@ -2444,12 +2449,13 @@ class DataBlock:
         self.ID = r.uint64(f)
         if expectedID != 0:
             if self.ID != self.expectedID:
-                raise Exception("%s  --  Invalid Block ID: got %d expected %d"%(self.__class__.__name__,self.ID ,self.expectedID))
+                raise Exception("%s -- offset %d  --  Invalid Block ID: got %d expected %d"%(self.__class__.__name__,f.tell()-8,self.ID ,self.expectedID))
         self.size = r.int32(f)
         self.blockStartOffset = f.tell()
         self.guid = r.guid(f)
         if expectedGUID != 0:
             self.validateGUID(expectedGUID)
+        asset.resources[self.guid] = self
         # print(self.__class__.__name__)
         # print("ID = ",self.ID,"\n","Size = ",self.size,"\nStart = ",self.blockStartOffset)
     def validateGUID(self,expectedGUID):
@@ -3208,8 +3214,9 @@ class RegularSkinnedMeshResource(DataBlock):
             self.primitives.append(RenderingPrimitiveResource(f,pf.guid))
 
         self.materials = []
-        for mr in self.materialRefs:
-            self.materials.append(RenderEffectResource(f,mr.guid))
+        uniqueMatRef = GetUniqueReferences(self.materialRefs)
+        for mr in uniqueMatRef.keys():
+            self.materials.append(RenderEffectResource(f,mr))
 
 class BoundingBox:
     def __init__(self,f):
@@ -3287,12 +3294,10 @@ class LodMeshResource(DataBlock): # was LODGroup
         self.EndBlock(f)
 
         self.meshList = []
-        if len(asset.MultiMeshResources) != 0:
-            multiMeshGuid = asset.MultiMeshResources[0].guid
-        else:
-            multiMeshGuid = 0
         for rp in self.meshRefs:
-            if rp.guid != multiMeshGuid:
+            if asset.resources.__contains__(rp.guid):
+                pass #LOD Mesh Resource is referencing a mesh that was already processed (likely MultiMesh)
+            else:
                 if self.meshBase.drawableCullInfo.meshType == 32:
                     self.meshList.append(RegularSkinnedMeshResource(f, expectedGuid=rp.guid))
                 elif self.meshBase.drawableCullInfo.meshType == -32:
